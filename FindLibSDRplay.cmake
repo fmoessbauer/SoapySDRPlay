@@ -14,23 +14,23 @@ if(NOT LIBSDRPLAY_FOUND)
 		SET( EX_PLATFORM_NAME "x86" )
 	endif( CMAKE_SIZEOF_VOID_P EQUAL 8 )
 
-	  find_path(LIBSDRPLAY_INCLUDE_DIRS NAMES mir_sdr.h
+	  find_path(LIBSDRPLAY_INCLUDE_DIRS NAMES sdrplay_api.h
 		PATHS
 		"${SDRPLAY_API_DIR}/inc"
 	  )
 
-	  find_library(LIBSDRPLAY_LIBRARIES NAMES mir_sdr_api.lib
+	  find_library(LIBSDRPLAY_LIBRARIES NAMES sdrplay_api.lib
 		PATHS
 		"${SDRPLAY_API_DIR}/${EX_PLATFORM_NAME}"
 	  )
   ELSE()
-	   find_path(LIBSDRPLAY_INCLUDE_DIRS NAMES mirsdrapi-rsp.h
+	  find_path(LIBSDRPLAY_INCLUDE_DIRS NAMES sdrplay_api.h
 		PATHS
 		/usr/include
 		/usr/local/include
 	  )
 
-	  find_library(LIBSDRPLAY_LIBRARIES NAMES mirsdrapi-rsp
+	  find_library(LIBSDRPLAY_LIBRARIES NAMES sdrplay_api
 		PATHS
 		/usr/lib
 		/usr/local/lib
@@ -40,11 +40,11 @@ if(NOT LIBSDRPLAY_FOUND)
   # ${LIBSDRPLAY_PKG_LIBRARY_DIRS}
 
 if(LIBSDRPLAY_INCLUDE_DIRS AND LIBSDRPLAY_LIBRARIES)
-  set(LIBSDRPLAY_FOUND TRUE CACHE INTERNAL "libsdrplay found")
-  message(STATUS "Found libsdrplay: ${LIBSDRPLAY_INCLUDE_DIRS}, ${LIBSDRPLAY_LIBRARIES}")
+  set(LIBSDRPLAY_FOUND TRUE CACHE INTERNAL "sdrplay_api (v3.x) found")
+  message(STATUS "Found lsdrplay_api (v3.x)): ${LIBSDRPLAY_INCLUDE_DIRS}, ${LIBSDRPLAY_LIBRARIES}")
 else(LIBSDRPLAY_INCLUDE_DIRS AND LIBSDRPLAY_LIBRARIES)
-  set(LIBSDRPLAY_FOUND FALSE CACHE INTERNAL "libsdrplay found")
-  message(STATUS "libsdrplay not found.")
+  set(LIBSDRPLAY_FOUND FALSE CACHE INTERNAL "sdrplay_api (v3.x) found")
+  message(STATUS "sdrplay_api (v3.x) )not found.")
 endif(LIBSDRPLAY_INCLUDE_DIRS AND LIBSDRPLAY_LIBRARIES)
 
 #mark_as_advanced(LIBSDRPLAY_LIBRARIES LIBSDRPLAY_INCLUDE_DIRS)

@@ -2,7 +2,7 @@
 # Build Soapy SDR support module for SDRPlay
 ########################################################################
 cmake_minimum_required(VERSION 2.8.7)
-project(SoapySDRPlay CXX)
+project(SoapySDRPlay3 CXX)
 
 find_package(SoapySDR "0.4.0" NO_MODULE REQUIRED)
 if (NOT SoapySDR_FOUND)
@@ -46,7 +46,7 @@ IF(RF_GAIN_IN_MENU)
 ENDIF()
 
 SOAPY_SDR_MODULE_UTIL(
-    TARGET sdrPlaySupport
+    TARGET sdrPlaySupport3
     SOURCES
         SoapySDRPlay.hpp
         Registration.cpp

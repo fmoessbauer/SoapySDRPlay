@@ -51,17 +51,26 @@ SoapySDR::ArgInfoList SoapySDRPlay::getStreamArgsInfo(const int direction, const
  * Async thread work
  ******************************************************************/
 
-static void _rx_callback(short *xi, short *xq, unsigned int firstSampleNum, int grChanged, int rfChanged, 
-                         int fsChanged, unsigned int numSamples, unsigned int reset, unsigned int hwRemoved, void *cbContext)
+static void _rx_callback(
+  short *xi,
+  short *xq,
+  sdrplay_api_StreamCbParamsT *params,
+  unsigned int numSamples,
+  unsigned int reset,
+  void *cbContext)
 {
     SoapySDRPlay *self = (SoapySDRPlay *)cbContext;
     return self->rx_callback(xi, xq, numSamples);
 }
 
-static void _gr_callback(unsigned int gRdB, unsigned int lnaGRdB, void *cbContext)
+static void _gr_callback(
+  sdrplay_api_EventT eventId,
+  sdrplay_api_TunerSelectT tuner,
+  sdrplay_api_EventParamsT *params,
+  void *cbContext)
 {
     SoapySDRPlay *self = (SoapySDRPlay *)cbContext;
-    return self->gr_callback(gRdB, lnaGRdB);
+    //return self->gr_callback(gRdB, lnaGRdB); // TODO
 }
 
 void SoapySDRPlay::rx_callback(short *xi, short *xq, unsigned int numSamples)
@@ -118,11 +127,13 @@ void SoapySDRPlay::rx_callback(short *xi, short *xq, unsigned int numSamples)
 
 void SoapySDRPlay::gr_callback(unsigned int gRdB, unsigned int lnaGRdB)
 {
+#if 0
     //Beware, lnaGRdB is really the LNA GR, NOT the LNA state !
  
-    mir_sdr_GainValuesT gainVals;
+    sdrplay_api_GainValuesT gainVals;
 
     mir_sdr_GetCurrentGain(&gainVals);
+
 
     if (gRdB < 200)
     {
@@ -143,6 +154,7 @@ void SoapySDRPlay::gr_callback(unsigned int gRdB, unsigned int lnaGRdB)
         mir_sdr_GainChangeCallbackMessageReceived();
         // OVERLOAD CORRECTED
     }
+#endif
 }
 
 /*******************************************************************
@@ -155,10 +167,11 @@ SoapySDR::Stream *SoapySDRPlay::setupStream(const int direction,
                                             const SoapySDR::Kwargs &args)
 {
     // check the channel configuration
-    if (channels.size() > 1 or (channels.size() > 0 and channels.at(0) != 0)) 
-    {
-       throw std::runtime_error("setupStream invalid channel selection");
-    }
+// TODO
+//    if (channels.size() > 1 or (channels.size() > 0 and channels.at(0) != 0)) 
+//    {
+//       throw std::runtime_error("setupStream invalid channel selection");
+//    }
     
     // check the format
     if (format == "CS16") 
@@ -202,7 +215,7 @@ void SoapySDRPlay::closeStream(SoapySDR::Stream *stream)
 
     if (streamActive)
     {
-        mir_sdr_StreamUninit();
+      sdrplay_api_Uninit(dev);
     }
     streamActive = false;
 }
@@ -226,31 +239,40 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
     resetBuffer = true;
     bufferedElems = 0;
     
-    mir_sdr_ErrT err;
+    sdrplay_api_ErrT err;
     
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
     //Enable (= 1) API calls tracing,
     //but only for debug purposes due to its performance impact. 
-    mir_sdr_DebugEnable(0);
+    sdrplay_api_DebugEnable(dev, (sdrplay_api_DbgLvl_t)0);
 
     //temporary fix for ARM targets.
 #if defined(__arm__) || defined(__aarch64__)
-    mir_sdr_SetTransferMode(mir_sdr_BULK);
+    deviceParams->mode = sdrplay_api_BULK;
+    // TODO: Update does not seem to be required (at least no reason stated)
 #endif
 
-    err = mir_sdr_StreamInit(&gRdB, sampleRate / 1e6, centerFrequency / 1e6, bwMode,
-                             ifMode, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps,
-                             _rx_callback, _gr_callback, (void *)this);
-    if (err != mir_sdr_Success)
+    sdrplay_api_CallbackFnsT cbFns;
+    cbFns.StreamACbFn = _rx_callback;
+    cbFns.StreamBCbFn = NULL;
+    cbFns.EventCbFn = _gr_callback;
+
+    err = sdrplay_api_Init(dev, &cbFns, (void*)this);
+
+//    err = mir_sdr_StreamInit(&gRdB, sampleRate / 1e6, centerFrequency / 1e6, bwMode,
+//                             ifMode, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps,
+//                             _rx_callback, _gr_callback, (void *)this);
+
+    if (err != sdrplay_api_Success)
     {
        //throw std::runtime_error("StreamInit Error: " + std::to_string(err));
        return SOAPY_SDR_NOT_SUPPORTED;
     }
-    mir_sdr_DecimateControl(decEnable, decM, 1);
+    //mir_sdr_DecimateControl(decEnable, decM, 1);
 
-    mir_sdr_SetDcMode(4,0);
-    mir_sdr_SetDcTrackTime(63);
+    //mir_sdr_SetDcMode(4,0);
+    //mir_sdr_SetDcTrackTime(63);
     
     streamActive = true;
     
@@ -268,7 +290,7 @@ int SoapySDRPlay::deactivateStream(SoapySDR::Stream *stream, const int flags, co
 
     if (streamActive)
     {
-        mir_sdr_StreamUninit();
+      sdrplay_api_Uninit(dev);
     }
 
     streamActive = false;

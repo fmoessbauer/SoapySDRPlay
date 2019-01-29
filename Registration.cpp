@@ -31,7 +31,7 @@
 
 #define MAX_RSP_DEVICES  (4)
 
-static mir_sdr_DeviceT rspDevs[MAX_RSP_DEVICES];
+static sdrplay_api_DeviceT rspDevs[MAX_RSP_DEVICES];
 bool deviceSelected = false;
 
 static std::vector<SoapySDR::Kwargs> findSDRPlay(const SoapySDR::Kwargs &args)
@@ -44,17 +44,21 @@ static std::vector<SoapySDR::Kwargs> findSDRPlay(const SoapySDR::Kwargs &args)
 
    if (deviceSelected == true)
    {
-      mir_sdr_ReleaseDeviceIdx();
-      deviceSelected = false;
+     sdrplay_api_Close();
+     deviceSelected = false;
    }
+
+   sdrplay_api_Open();
    //Enable (= 1) API calls tracing,
    //but only for debug purposes due to its performance impact. 
-   mir_sdr_DebugEnable(0);
+   // TODO: Replace constant with undocumented sdrplay_api_DbgLvl_t
+   sdrplay_api_DebugEnable(NULL, (sdrplay_api_DbgLvl_t)0u);
 
    std::string baseLabel = "SDRplay Dev";
 
 	// list devices by API
-   mir_sdr_GetDevices(&rspDevs[0], &nDevs, MAX_RSP_DEVICES);
+   sdrplay_api_GetDevices(&rspDevs[0], &nDevs, MAX_RSP_DEVICES);
+
 
    size_t posidx = labelHint.find(baseLabel);
 
@@ -62,15 +66,15 @@ static std::vector<SoapySDR::Kwargs> findSDRPlay(const SoapySDR::Kwargs &args)
    {
       unsigned int devIdx = labelHint.at(posidx + baseLabel.length()) - 0x30;
 
-      if ((devIdx < nDevs) && (rspDevs[devIdx].devAvail))
+      if (devIdx < nDevs)
       {
          SoapySDR::Kwargs dev;
-         dev["driver"] = "sdrplay";
+         dev["driver"] = "sdrplay3";
          if (rspDevs[devIdx].hwVer > 253)
          {
              sprintf_s(lblstr, 128, "SDRplay Dev%d RSP1A %s", devIdx, rspDevs[devIdx].SerNo);
          }
-         else if (rspDevs[devIdx].hwVer == 3)
+         else if (rspDevs[devIdx].hwVer == SDRPLAY_RSPduo_ID)
          {
              sprintf_s(lblstr, 128, "SDRplay Dev%d RSPduo %s", devIdx, rspDevs[devIdx].SerNo);
          }
@@ -86,27 +90,25 @@ static std::vector<SoapySDR::Kwargs> findSDRPlay(const SoapySDR::Kwargs &args)
    {
       for (unsigned int i = 0; i < nDevs; i++)
       {
-         if (rspDevs[i].devAvail)
-         {
-            SoapySDR::Kwargs dev;
-            dev["driver"] = "sdrplay";
-            if (rspDevs[i].hwVer > 253)
-            {
-               sprintf_s(lblstr, 128, "SDRplay Dev%d RSP1A %s", i, rspDevs[i].SerNo);
-            }
-            else if (rspDevs[i].hwVer == 3)
-            {
-               sprintf_s(lblstr, 128, "SDRplay Dev%d RSPduo %s", i, rspDevs[i].SerNo);
-            }
-            else
-            {
-               sprintf_s(lblstr, 128, "SDRplay Dev%d RSP%d %s", i, rspDevs[i].hwVer, rspDevs[i].SerNo);
-            }
-            dev["label"] = lblstr;
-            results.push_back(dev);
-         }
+        SoapySDR::Kwargs dev;
+        dev["driver"] = "sdrplay3";
+        if (rspDevs[i].hwVer > 253)
+        {
+           sprintf_s(lblstr, 128, "SDRplay Dev%d RSP1A %s", i, rspDevs[i].SerNo);
+        }
+        else if (rspDevs[i].hwVer == 3)
+        {
+           sprintf_s(lblstr, 128, "SDRplay Dev%d RSPduo %s", i, rspDevs[i].SerNo);
+        }
+        else
+        {
+           sprintf_s(lblstr, 128, "SDRplay Dev%d RSP%d %s", i, rspDevs[i].hwVer, rspDevs[i].SerNo);
+        }
+        dev["label"] = lblstr;
+        results.push_back(dev);
       }
    }
+   sdrplay_api_Close();
    return results;
 }
 
@@ -115,4 +117,4 @@ static SoapySDR::Device *makeSDRPlay(const SoapySDR::Kwargs &args)
     return new SoapySDRPlay(args);
 }
 
-static SoapySDR::Registry registerSDRPlay("sdrplay", &findSDRPlay, &makeSDRPlay, SOAPY_SDR_ABI_VERSION);
+static SoapySDR::Registry registerSDRPlay("sdrplay3", &findSDRPlay, &makeSDRPlay, SOAPY_SDR_ABI_VERSION);

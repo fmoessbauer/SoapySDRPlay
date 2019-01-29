@@ -26,15 +26,14 @@
 
 extern bool deviceSelected;    // global declared in Registration.cpp
 
-#define MAX_RSP_DEVICES  (4)
+#define MAX_RSP_DEVICES  (6)
 
-static mir_sdr_DeviceT rspDevs[MAX_RSP_DEVICES];
+static sdrplay_api_DeviceT rspDevs[MAX_RSP_DEVICES];
 
 SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
 {
     std::string label = args.at("label");
-
-	std::string baseLabel = "SDRplay Dev";
+    std::string baseLabel = "SDRplay Dev";
 
     size_t posidx = label.find(baseLabel);
 
@@ -43,15 +42,17 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
         SoapySDR_logf(SOAPY_SDR_WARNING, "Can't find Dev string in args");
         return;
     }
+    sdrplay_api_Open();
+
 	//retreive device index
     unsigned int devIdx = label.at(posidx + baseLabel.length()) - 0x30;
 
 	// retreive hwVer and serNo by API
 	unsigned int nDevs = 0;
 
-	mir_sdr_GetDevices(&rspDevs[0], &nDevs, MAX_RSP_DEVICES);
+	sdrplay_api_GetDevices(&rspDevs[0], &nDevs, MAX_RSP_DEVICES);
 
-	if ((devIdx < nDevs) && (rspDevs[devIdx].devAvail)) {
+	if (devIdx < nDevs) {
 
 		hwVer = rspDevs[devIdx].hwVer;
 		serNo = rspDevs[devIdx].SerNo;
@@ -68,23 +69,30 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
 		return;
 	}
 
-    mir_sdr_ApiVersion(&ver);
-    if (ver != MIR_SDR_API_VERSION)
+    sdrplay_api_ApiVersion(&ver);
+    if (ver != SDRPLAY_API_VERSION)
     {
-        SoapySDR_logf(SOAPY_SDR_WARNING, "mir_sdr version: '%.3f' does not equal build version: '%.3f'", ver, MIR_SDR_API_VERSION);
+        SoapySDR_logf(SOAPY_SDR_WARNING, "sdrplay_api version: '%.3f' does not equal build version: '%.3f'", ver, SDRPLAY_API_VERSION);
     }
 
-    mir_sdr_SetDeviceIdx(devIdx);
+    sdrplay_api_LockDeviceApi();
+    sdrplay_api_SelectDevice(&rspDevs[devIdx]);
+    dev = &rspDevs[devIdx];
+    sdrplay_api_UnlockDeviceApi();
     deviceSelected = true;
 
+    sdrplay_api_GetDeviceParams(dev, &deviceParams);
+
+    // we do not change any values
+    #if 0
     sampleRate = 2000000;
     reqSampleRate = sampleRate;
     decM = 1;
     decEnable = 0;
     centerFrequency = 100;
     ppm = 0.0;
-    ifMode = mir_sdr_IF_Zero;
-    bwMode = mir_sdr_BW_1_536;
+    ifMode = sdrplay_api_IF_Zero;
+    bwMode = sdrplay_api_BW_1_536;
     gRdB = 40;
     lnaState = (hwVer == 2 || hwVer == 3 || hwVer > 253)? 4: 1;
 
@@ -92,19 +100,20 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
     shortsPerWord = 1;
     bufferLength = bufferElems * elementsPerSample * shortsPerWord;
 
-    agcMode = mir_sdr_AGC_100HZ;
+    agcMode = sdrplay_api_AGC_100HZ;
     dcOffsetMode = true;
 
     IQcorr = 1;
     setPoint = -30;
 
-    antSel = mir_sdr_RSPII_ANTENNA_A;
-    tunSel = mir_sdr_rspDuo_Tuner_1;
-    amPort = 0;
+    antSel = sdrplay_api_Rsp2_ANTENNA_A;
+    tunSel = rspDevs[devIdx].tuner; // TODO
+    amPort = sdrplay_api_Rsp2_AMPORT_1; // TODO
     extRef = 0;
     biasTen = 0;
     notchEn = 0;
     dabNotchEn = 0;
+#endif
 
     bufferedElems = 0;
     _currentBuff = 0;
@@ -120,10 +129,10 @@ SoapySDRPlay::~SoapySDRPlay(void)
 
     if (streamActive)
     {
-        mir_sdr_StreamUninit();
+        sdrplay_api_Uninit(dev);
     }
     streamActive = false;
-    mir_sdr_ReleaseDeviceIdx();
+    sdrplay_api_Close();
     deviceSelected = false;
 }
 
@@ -147,8 +156,8 @@ SoapySDR::Kwargs SoapySDRPlay::getHardwareInfo(void) const
     //this also gets printed in --probe
     SoapySDR::Kwargs hwArgs;
 
-    hwArgs["mir_sdr_api_version"] = std::to_string(ver);
-    hwArgs["mir_sdr_hw_version"] = std::to_string(hwVer);
+    hwArgs["sdrplay_api_api_version"] = std::to_string(ver);
+    hwArgs["sdrplay_api_hw_version"] = std::to_string(hwVer);
 
     return hwArgs;
 }
@@ -159,7 +168,12 @@ SoapySDR::Kwargs SoapySDRPlay::getHardwareInfo(void) const
 
 size_t SoapySDRPlay::getNumChannels(const int dir) const
 {
-    return (dir == SOAPY_SDR_RX) ? 1 : 0;
+  if(dir == SOAPY_SDR_TX)
+    return 0;
+  if(hwVer == SDRPLAY_RSPduo_ID)
+    return 2;
+  else
+    return 1;
 }
 
 /*******************************************************************
@@ -177,158 +191,83 @@ std::vector<std::string> SoapySDRPlay::listAntennas(const int direction, const s
     if (hwVer == 1 || hwVer > 253) {
         antennas.push_back("RX");
     }
-    else if (hwVer == 2) {
+    else if (hwVer == SDRPLAY_RSP2_ID) {
         antennas.push_back("Antenna A");
         antennas.push_back("Antenna B");
         antennas.push_back("Hi-Z");
     }
-    else if (hwVer == 3) {
+    else if (hwVer == SDRPLAY_RSPduo_ID) {
+      if(channel == 0){
         antennas.push_back("Tuner 1 50 ohm");
-        antennas.push_back("Tuner 2 50 ohm");
         antennas.push_back("Tuner 1 Hi-Z");
+      } else {
+        antennas.push_back("Tuner 2 50 ohm");
+      }
     }
     return antennas;
 }
 
 void SoapySDRPlay::setAntenna(const int direction, const size_t channel, const std::string &name)
 {
-    // Check direction
-    if ((direction != SOAPY_SDR_RX) || (hwVer == 1) || (hwVer > 253)) {
-        return;       
+  std::lock_guard <std::mutex> lock(_general_state_mutex);
+
+  if ((direction != SOAPY_SDR_RX) || (hwVer == SDRPLAY_RSP1_ID) || (hwVer > 253)) {
+    return;
+  } else if(hwVer == SDRPLAY_RSP2_ID){
+    if(name == "Antenna A"){
+      deviceParams->rxChannelA->rsp2TunerParams.antennaSel = sdrplay_api_Rsp2_ANTENNA_A;
+      deviceParams->rxChannelA->rsp2TunerParams.amPortSel  = sdrplay_api_Rsp2_AMPORT_1;
+    } else if(name == "Antenna B"){
+      deviceParams->rxChannelA->rsp2TunerParams.antennaSel = sdrplay_api_Rsp2_ANTENNA_B;
+      deviceParams->rxChannelA->rsp2TunerParams.amPortSel  = sdrplay_api_Rsp2_AMPORT_1;
+    } else if(name == "Hi-Z"){
+      deviceParams->rxChannelA->rsp2TunerParams.antennaSel = sdrplay_api_Rsp2_ANTENNA_A;
+      deviceParams->rxChannelA->rsp2TunerParams.amPortSel  = sdrplay_api_Rsp2_AMPORT_2;
     }
-
-    std::lock_guard <std::mutex> lock(_general_state_mutex);
-
-    if (hwVer == 2)
-    {
-        bool changeToAntennaA_B = false;
-
-        if (name == "Antenna A")
-        {
-            antSel = mir_sdr_RSPII_ANTENNA_A;
-            changeToAntennaA_B = true;
+  } else if(hwVer == SDRPLAY_RSPduo_ID){
+    if(channel == 0){
+      if(name == "Tuner 1 Hi-Z"){
+        deviceParams->rxChannelA->rspDuoTunerParams.tuner1AmPortSel = sdrplay_api_RspDuo_AMPORT_1;
+      }
+      else if(name == "Tuner 1 50 ohm"){
+        deviceParams->rxChannelA->rspDuoTunerParams.tuner1AmPortSel = sdrplay_api_RspDuo_AMPORT_2;
+      }
+    } else if(channel == 1){
+        if(name == "Tuner 2 50 ohm"){
+          // just one antenna on this tuner
         }
-        else if (name == "Antenna B")
-        {
-            antSel = mir_sdr_RSPII_ANTENNA_B;
-            changeToAntennaA_B = true;
-        }
-        else if (name == "Hi-Z")
-        {
-            amPort = 1;
-            mir_sdr_AmPortSelect(amPort);
-
-            if (streamActive)
-            {
-                mir_sdr_Reinit(&gRdB, 0.0, 0.0, mir_sdr_BW_Undefined, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_AM_PORT);
-            }
-        }
-
-        if (changeToAntennaA_B)
-        {
-        
-            //if we are currently High_Z, make the switch first.
-            if (amPort == 1)
-            {
-                amPort = 0;
-                mir_sdr_AmPortSelect(amPort);
-            
-                mir_sdr_RSPII_AntennaControl(antSel);
-
-                if (streamActive)
-                {
-                    mir_sdr_Reinit(&gRdB, 0.0, 0.0, mir_sdr_BW_Undefined, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_AM_PORT);
-                }
-            }
-            else
-            {
-                mir_sdr_RSPII_AntennaControl(antSel);
-            }
-        }
-    }
-    else if (hwVer == 3)
-    {
-        bool changeToTuner1_2 = false;
-        if (name == "Tuner 1 50 ohm")
-        {
-            amPort = 0;
-            if (tunSel != mir_sdr_rspDuo_Tuner_1)
-            {
-                tunSel = mir_sdr_rspDuo_Tuner_1;
-                changeToTuner1_2 = true;
-            }
-        }
-        else if (name == "Tuner 2 50 ohm")
-        {
-            amPort = 0;
-            if (tunSel != mir_sdr_rspDuo_Tuner_2)
-            {
-                tunSel = mir_sdr_rspDuo_Tuner_2;
-                changeToTuner1_2 = true;
-            }
-        }
-        else if (name == "Tuner 1 HiZ")
-        {
-            amPort = 1;
-            if (tunSel != mir_sdr_rspDuo_Tuner_1)
-            {
-                tunSel = mir_sdr_rspDuo_Tuner_1;
-                changeToTuner1_2 = true;
-            }
-        }
-
-        if (changeToTuner1_2)
-        {
-            changeToTuner1_2 = false;
-            mir_sdr_rspDuo_TunerSel(tunSel);
-        }
-
-        mir_sdr_AmPortSelect(amPort);
-
-        if (streamActive)
-        {
-            mir_sdr_Reinit(&gRdB, 0.0, 0.0, mir_sdr_BW_Undefined, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_AM_PORT);
-        }
-    }
+      }
+  }
+  sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Rsp2_AntennaControl);
 }
 
 std::string SoapySDRPlay::getAntenna(const int direction, const size_t channel) const
 {
-    std::lock_guard <std::mutex> lock(_general_state_mutex);
+  if(direction != SOAPY_SDR_RX) return "";
 
-    if (direction == SOAPY_SDR_TX)
-    {
-        return "";
-    }
+  if(hwVer == SDRPLAY_RSP1_ID)
+    return "RX";
 
-    if (hwVer == 2)
-    {
-        if (amPort == 1) {
-            return "Hi-Z";
-        }
-        else if (antSel == mir_sdr_RSPII_ANTENNA_A) {
-            return "Antenna A";
-        }
-        else {
-            return "Antenna B";  
-        }
-    }
-    else if (hwVer == 3)
-    {
-        if (amPort == 1) {
-            return "Tuner 1 Hi-Z";
-        }
-        else if (tunSel == mir_sdr_rspDuo_Tuner_1) {
-            return "Tuner 1 50 ohm";
-        }
-        else {
-            return "Tuner 2 50 ohm";  
-        }
-    }
+  if(hwVer == SDRPLAY_RSP2_ID){
+    if(deviceParams->rxChannelA->rsp2TunerParams.amPortSel == sdrplay_api_Rsp2_AMPORT_2)
+      return "Hi-Z";
+    else if(deviceParams->rxChannelA->rsp2TunerParams.antennaSel == sdrplay_api_Rsp2_ANTENNA_A)
+      return "Anteanna A";
     else
-    {
-        return "RX";
+      return "Antenna B";
+  }
+
+  if(hwVer == SDRPLAY_RSPduo_ID){
+    if(channel == 1)
+      return "Tuner 2 50 ohm";
+    else {
+      if(deviceParams->rxChannelA->rspDuoTunerParams.tuner1AmPortSel == sdrplay_api_RspDuo_AMPORT_1)
+        return "Tuner 1 Hi-Z";
+      else
+        return "Tuner 1 50 ohm";
     }
+  }
+  return "";
 }
 
 /*******************************************************************
@@ -344,16 +283,19 @@ void SoapySDRPlay::setDCOffsetMode(const int direction, const size_t channel, co
 {
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
-    //enable/disable automatic DC removal
-    dcOffsetMode = automatic;
-    mir_sdr_DCoffsetIQimbalanceControl((unsigned int)automatic, (unsigned int)automatic);
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+
+    rxChannel->ctrlParams.dcOffset.DCenable = automatic;
+    // TODO: possibly add IQenable as well
+    sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Ctrl_DCoffsetIQimbalance);
 }
 
 bool SoapySDRPlay::getDCOffsetMode(const int direction, const size_t channel) const
 {
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
-    return dcOffsetMode;
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+    return rxChannel->ctrlParams.dcOffset.DCenable;
 }
 
 bool SoapySDRPlay::hasDCOffset(const int direction, const size_t channel) const
@@ -385,28 +327,33 @@ bool SoapySDRPlay::hasGainMode(const int direction, const size_t channel) const
 
 void SoapySDRPlay::setGainMode(const int direction, const size_t channel, const bool automatic)
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
-    agcMode = mir_sdr_AGC_DISABLE;
+    agcMode = sdrplay_api_AGC_DISABLE;
 
     if (automatic == true) {
-        agcMode = mir_sdr_AGC_100HZ;
+        agcMode = sdrplay_api_AGC_100HZ;
         //align known agc values with current value before starting AGC.
         current_gRdB = gRdB;
     }
-    mir_sdr_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
+    sdrplay_api_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
+#endif
 }
 
 bool SoapySDRPlay::getGainMode(const int direction, const size_t channel) const
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
-    return (agcMode == mir_sdr_AGC_DISABLE)? false: true;
+    return (agcMode == sdrplay_api_AGC_DISABLE)? false: true;
+#endif
 }
 
 void SoapySDRPlay::setGain(const int direction, const size_t channel, const std::string &name, const double value)
 {
-    std::lock_guard <std::mutex> lock(_general_state_mutex);
+#if 0
+   std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    bool doUpdate = false;
 
@@ -432,12 +379,14 @@ void SoapySDRPlay::setGain(const int direction, const size_t channel, const std:
    }
    if ((doUpdate == true) && (streamActive))
    {
-      mir_sdr_Reinit(&gRdB, 0.0, 0.0, mir_sdr_BW_Undefined, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_GR);
+      sdrplay_api_Reinit(&gRdB, 0.0, 0.0, sdrplay_api_BW_Undefined, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_GR);
    }
+#endif
 }
 
 double SoapySDRPlay::getGain(const int direction, const size_t channel, const std::string &name) const
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    if (name == "IFGR")
@@ -450,6 +399,7 @@ double SoapySDRPlay::getGain(const int direction, const size_t channel, const st
    }
 
    return 0;
+#endif
 }
 
 SoapySDR::Range SoapySDRPlay::getGainRange(const int direction, const size_t channel, const std::string &name) const
@@ -487,6 +437,7 @@ void SoapySDRPlay::setFrequency(const int direction,
                                 const double frequency,
                                 const SoapySDR::Kwargs &args)
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    if (direction == SOAPY_SDR_RX)
@@ -496,15 +447,16 @@ void SoapySDRPlay::setFrequency(const int direction,
          centerFrequency = (uint32_t)frequency;
          if (streamActive)
          {
-            mir_sdr_Reinit(&gRdB, 0.0, frequency / 1e6, mir_sdr_BW_Undefined, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_RF_FREQ);
+            sdrplay_api_Reinit(&gRdB, 0.0, frequency / 1e6, sdrplay_api_BW_Undefined, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_RF_FREQ);
          }
       }
       else if ((name == "CORR") && (ppm != frequency))
       {
          ppm = frequency;
-         mir_sdr_SetPpm(ppm);
+         sdrplay_api_SetPpm(ppm);
       }
    }
+#endif
 }
 
 double SoapySDRPlay::getFrequency(const int direction, const size_t channel, const std::string &name) const
@@ -554,6 +506,7 @@ SoapySDR::ArgInfoList SoapySDRPlay::getFrequencyArgsInfo(const int direction, co
 
 void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, const double rate)
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
     SoapySDR_logf(SOAPY_SDR_DEBUG, "Setting sample rate: %d", sampleRate);
@@ -572,14 +525,15 @@ void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, cons
           resetBuffer = true;
           if (streamActive)
           {
-             mir_sdr_Reinit(&gRdB, sampleRate / 1e6, 0.0, bwMode, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, (mir_sdr_ReasonForReinitT)(mir_sdr_CHANGE_FS_FREQ | mir_sdr_CHANGE_BW_TYPE));
-             if (ifMode == mir_sdr_IF_Zero)
+             sdrplay_api_Reinit(&gRdB, sampleRate / 1e6, 0.0, bwMode, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, (sdrplay_api_ReasonForReinitT)(sdrplay_api_CHANGE_FS_FREQ | sdrplay_api_CHANGE_BW_TYPE));
+             if (ifMode == sdrplay_api_IF_Zero)
              {
-                mir_sdr_DecimateControl(decEnable, decM, 1);
+                sdrplay_api_DecimateControl(decEnable, decM, 1);
              }
           }
        }
     }
+#endif
 }
 
 double SoapySDRPlay::getSampleRate(const int direction, const size_t channel) const
@@ -608,18 +562,19 @@ std::vector<double> SoapySDRPlay::listSampleRates(const int direction, const siz
     return rates;
 }
 
-uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, mir_sdr_If_kHzT ifMode)
+uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, sdrplay_api_If_kHzT ifMode)
 {
-   if (ifMode == mir_sdr_IF_2_048)
+#if 0
+   if (ifMode == sdrplay_api_IF_2_048)
    {
       if      (rate == 2048000) { *decM = 4; *decEnable = 1; return 8192000; }
    }
-   else if (ifMode == mir_sdr_IF_0_450)
+   else if (ifMode == sdrplay_api_IF_0_450)
    {
       if      (rate == 1000000) { *decM = 2; *decEnable = 1; return 2000000; }
       else if (rate == 500000)  { *decM = 4; *decEnable = 1; return 2000000; }
    }
-   else if (ifMode == mir_sdr_IF_Zero)
+   else if (ifMode == sdrplay_api_IF_Zero)
    {
 
       if      ((rate >= 200000)  && (rate < 500000))  { *decM = 8; *decEnable = 1; return 2000000; }
@@ -630,6 +585,7 @@ uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned i
 
    // this is invalid, but return something
    *decM = 1; *decEnable = 0; return rate;
+#endif
 }
 
 /*******************************************************************
@@ -638,6 +594,7 @@ uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned i
 
 void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const double bw_in)
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    if (direction == SOAPY_SDR_RX) 
@@ -647,14 +604,16 @@ void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const
          bwMode = mirGetBwMhzEnum(bw_in);
          if (streamActive)
          {
-            mir_sdr_Reinit(&gRdB, 0.0, 0.0, bwMode, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_BW_TYPE);
+            sdrplay_api_Reinit(&gRdB, 0.0, 0.0, bwMode, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_BW_TYPE);
          }
       }
    }
+#endif
 }
 
 double SoapySDRPlay::getBandwidth(const int direction, const size_t channel) const
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    if (direction == SOAPY_SDR_RX)
@@ -662,6 +621,7 @@ double SoapySDRPlay::getBandwidth(const int direction, const size_t channel) con
       return getBwValueFromEnum(bwMode);
    }
    return 0;
+#endif
 }
 
 std::vector<double> SoapySDRPlay::listBandwidths(const int direction, const size_t channel) const
@@ -689,118 +649,118 @@ SoapySDR::RangeList SoapySDRPlay::getBandwidthRange(const int direction, const s
    return results;
 }
 
-double SoapySDRPlay::getRateForBwEnum(mir_sdr_Bw_MHzT bwEnum)
+double SoapySDRPlay::getRateForBwEnum(sdrplay_api_Bw_MHzT bwEnum)
 {
-   if (bwEnum == mir_sdr_BW_0_200) return 250000;
-   else if (bwEnum == mir_sdr_BW_0_300) return 500000;
-   else if (bwEnum == mir_sdr_BW_0_600) return 1000000;
-   else if (bwEnum == mir_sdr_BW_1_536) return 2000000;
-   else if (bwEnum == mir_sdr_BW_5_000) return 5000000;
-   else if (bwEnum == mir_sdr_BW_6_000) return 6000000;
-   else if (bwEnum == mir_sdr_BW_7_000) return 7000000;
-   else if (bwEnum == mir_sdr_BW_8_000) return 8000000;
+   if (bwEnum == sdrplay_api_BW_0_200) return 250000;
+   else if (bwEnum == sdrplay_api_BW_0_300) return 500000;
+   else if (bwEnum == sdrplay_api_BW_0_600) return 1000000;
+   else if (bwEnum == sdrplay_api_BW_1_536) return 2000000;
+   else if (bwEnum == sdrplay_api_BW_5_000) return 5000000;
+   else if (bwEnum == sdrplay_api_BW_6_000) return 6000000;
+   else if (bwEnum == sdrplay_api_BW_7_000) return 7000000;
+   else if (bwEnum == sdrplay_api_BW_8_000) return 8000000;
    else return 0;
 }
 
 
-mir_sdr_Bw_MHzT SoapySDRPlay::getBwEnumForRate(double rate, mir_sdr_If_kHzT ifMode)
+sdrplay_api_Bw_MHzT SoapySDRPlay::getBwEnumForRate(double rate, sdrplay_api_If_kHzT ifMode)
 {
-   if (ifMode == mir_sdr_IF_Zero)
+   if (ifMode == sdrplay_api_IF_Zero)
    {
-      if      ((rate >= 200000)  && (rate < 300000))  return mir_sdr_BW_0_200;
-      else if ((rate >= 300000)  && (rate < 600000))  return mir_sdr_BW_0_300;
-      else if ((rate >= 600000)  && (rate < 1536000)) return mir_sdr_BW_0_600;
-      else if ((rate >= 1536000) && (rate < 5000000)) return mir_sdr_BW_1_536;
-      else if ((rate >= 5000000) && (rate < 6000000)) return mir_sdr_BW_5_000;
-      else if ((rate >= 6000000) && (rate < 7000000)) return mir_sdr_BW_6_000;
-      else if ((rate >= 7000000) && (rate < 8000000)) return mir_sdr_BW_7_000;
-      else                                            return mir_sdr_BW_8_000;
+      if      ((rate >= 200000)  && (rate < 300000))  return sdrplay_api_BW_0_200;
+      else if ((rate >= 300000)  && (rate < 600000))  return sdrplay_api_BW_0_300;
+      else if ((rate >= 600000)  && (rate < 1536000)) return sdrplay_api_BW_0_600;
+      else if ((rate >= 1536000) && (rate < 5000000)) return sdrplay_api_BW_1_536;
+      else if ((rate >= 5000000) && (rate < 6000000)) return sdrplay_api_BW_5_000;
+      else if ((rate >= 6000000) && (rate < 7000000)) return sdrplay_api_BW_6_000;
+      else if ((rate >= 7000000) && (rate < 8000000)) return sdrplay_api_BW_7_000;
+      else                                            return sdrplay_api_BW_8_000;
    }
-   else if ((ifMode == mir_sdr_IF_0_450) || (ifMode == mir_sdr_IF_1_620))
+   else if ((ifMode == sdrplay_api_IF_0_450) || (ifMode == sdrplay_api_IF_1_620))
    {
-      if      ((rate >= 200000)  && (rate < 500000))  return mir_sdr_BW_0_200;
-      else if ((rate >= 500000)  && (rate < 1000000)) return mir_sdr_BW_0_300;
-      else                                            return mir_sdr_BW_0_600;
+      if      ((rate >= 200000)  && (rate < 500000))  return sdrplay_api_BW_0_200;
+      else if ((rate >= 500000)  && (rate < 1000000)) return sdrplay_api_BW_0_300;
+      else                                            return sdrplay_api_BW_0_600;
    }
    else
    {
-      if      ((rate >= 200000)  && (rate < 500000))  return mir_sdr_BW_0_200;
-      else if ((rate >= 500000)  && (rate < 1000000)) return mir_sdr_BW_0_300;
-      else if ((rate >= 1000000) && (rate < 1536000)) return mir_sdr_BW_0_600;
-      else                                            return mir_sdr_BW_1_536;
+      if      ((rate >= 200000)  && (rate < 500000))  return sdrplay_api_BW_0_200;
+      else if ((rate >= 500000)  && (rate < 1000000)) return sdrplay_api_BW_0_300;
+      else if ((rate >= 1000000) && (rate < 1536000)) return sdrplay_api_BW_0_600;
+      else                                            return sdrplay_api_BW_1_536;
    }
 }
 
 
-double SoapySDRPlay::getBwValueFromEnum(mir_sdr_Bw_MHzT bwEnum)
+double SoapySDRPlay::getBwValueFromEnum(sdrplay_api_Bw_MHzT bwEnum)
 {
-   if      (bwEnum == mir_sdr_BW_0_200) return 200000;
-   else if (bwEnum == mir_sdr_BW_0_300) return 300000;
-   else if (bwEnum == mir_sdr_BW_0_600) return 600000;
-   else if (bwEnum == mir_sdr_BW_1_536) return 1536000;
-   else if (bwEnum == mir_sdr_BW_5_000) return 5000000;
-   else if (bwEnum == mir_sdr_BW_6_000) return 6000000;
-   else if (bwEnum == mir_sdr_BW_7_000) return 7000000;
-   else if (bwEnum == mir_sdr_BW_8_000) return 8000000;
+   if      (bwEnum == sdrplay_api_BW_0_200) return 200000;
+   else if (bwEnum == sdrplay_api_BW_0_300) return 300000;
+   else if (bwEnum == sdrplay_api_BW_0_600) return 600000;
+   else if (bwEnum == sdrplay_api_BW_1_536) return 1536000;
+   else if (bwEnum == sdrplay_api_BW_5_000) return 5000000;
+   else if (bwEnum == sdrplay_api_BW_6_000) return 6000000;
+   else if (bwEnum == sdrplay_api_BW_7_000) return 7000000;
+   else if (bwEnum == sdrplay_api_BW_8_000) return 8000000;
    else return 0;
 }
 
 
-mir_sdr_Bw_MHzT SoapySDRPlay::mirGetBwMhzEnum(double bw)
+sdrplay_api_Bw_MHzT SoapySDRPlay::mirGetBwMhzEnum(double bw)
 {
-   if      (bw == 200000) return mir_sdr_BW_0_200;
-   else if (bw == 300000) return mir_sdr_BW_0_300;
-   else if (bw == 600000) return mir_sdr_BW_0_600;
-   else if (bw == 1536000) return mir_sdr_BW_1_536;
-   else if (bw == 5000000) return mir_sdr_BW_5_000;
-   else if (bw == 6000000) return mir_sdr_BW_6_000;
-   else if (bw == 7000000) return mir_sdr_BW_7_000;
-   else if (bw == 8000000) return mir_sdr_BW_8_000;
-   else return mir_sdr_BW_0_200;
+   if      (bw == 200000) return sdrplay_api_BW_0_200;
+   else if (bw == 300000) return sdrplay_api_BW_0_300;
+   else if (bw == 600000) return sdrplay_api_BW_0_600;
+   else if (bw == 1536000) return sdrplay_api_BW_1_536;
+   else if (bw == 5000000) return sdrplay_api_BW_5_000;
+   else if (bw == 6000000) return sdrplay_api_BW_6_000;
+   else if (bw == 7000000) return sdrplay_api_BW_7_000;
+   else if (bw == 8000000) return sdrplay_api_BW_8_000;
+   else return sdrplay_api_BW_0_200;
 }
 
 /*******************************************************************
 * Settings API
 ******************************************************************/
 
-mir_sdr_If_kHzT SoapySDRPlay::stringToIF(std::string ifMode)
+sdrplay_api_If_kHzT SoapySDRPlay::stringToIF(std::string ifMode)
 {
    if (ifMode == "Zero-IF")
    {
-      return mir_sdr_IF_Zero;
+      return sdrplay_api_IF_Zero;
    }
    else if (ifMode == "450kHz")
    {
-      return mir_sdr_IF_0_450;
+      return sdrplay_api_IF_0_450;
    }
    else if (ifMode == "1620kHz")
    {
-      return mir_sdr_IF_1_620;
+      return sdrplay_api_IF_1_620;
    }
    else if (ifMode == "2048kHz")
    {
-      return mir_sdr_IF_2_048;
+      return sdrplay_api_IF_2_048;
    }
-   return mir_sdr_IF_Zero;
+   return sdrplay_api_IF_Zero;
 }
 
-std::string SoapySDRPlay::IFtoString(mir_sdr_If_kHzT ifkHzT)
+std::string SoapySDRPlay::IFtoString(sdrplay_api_If_kHzT ifkHzT)
 {
    switch (ifkHzT)
    {
-   case mir_sdr_IF_Zero:
+   case sdrplay_api_IF_Zero:
       return "Zero-IF";
       break;
-   case mir_sdr_IF_0_450:
+   case sdrplay_api_IF_0_450:
       return "450kHz";
       break;
-   case mir_sdr_IF_1_620:
+   case sdrplay_api_IF_1_620:
       return "1620kHz";
       break;
-   case mir_sdr_IF_2_048:
+   case sdrplay_api_IF_2_048:
       return "2048kHz";
       break;
-   case mir_sdr_IF_Undefined:
+   case sdrplay_api_IF_Undefined:
       return "";
       break;
    }
@@ -893,10 +853,10 @@ SoapySDR::ArgInfoList SoapySDRPlay::getSettingInfo(void) const
     AIFArg.name = "IF Mode";
     AIFArg.description = "IF frequency in kHz";
     AIFArg.type = SoapySDR::ArgInfo::STRING;
-    AIFArg.options.push_back(IFtoString(mir_sdr_IF_Zero));
-    AIFArg.options.push_back(IFtoString(mir_sdr_IF_0_450));
-    AIFArg.options.push_back(IFtoString(mir_sdr_IF_1_620));
-    AIFArg.options.push_back(IFtoString(mir_sdr_IF_2_048));
+    AIFArg.options.push_back(IFtoString(sdrplay_api_IF_Zero));
+    AIFArg.options.push_back(IFtoString(sdrplay_api_IF_0_450));
+    AIFArg.options.push_back(IFtoString(sdrplay_api_IF_1_620));
+    AIFArg.options.push_back(IFtoString(sdrplay_api_IF_2_048));
     setArgs.push_back(AIFArg);
 
     SoapySDR::ArgInfo IQcorrArg;
@@ -1008,6 +968,7 @@ SoapySDR::ArgInfoList SoapySDRPlay::getSettingInfo(void) const
 
 void SoapySDRPlay::writeSetting(const std::string &key, const std::string &value)
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
 #ifdef RF_GAIN_IN_MENU
@@ -1023,13 +984,13 @@ void SoapySDRPlay::writeSetting(const std::string &key, const std::string &value
       else if (value == "7") lnaState = 7;
       else if (value == "8") lnaState = 8;
       else                   lnaState = 9;
-      if (agcMode != mir_sdr_AGC_DISABLE)
+      if (agcMode != sdrplay_api_AGC_DISABLE)
       {
-         mir_sdr_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
+         sdrplay_api_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
       }
       else
       {
-         mir_sdr_Reinit(&gRdB, 0.0, 0.0, mir_sdr_BW_Undefined, mir_sdr_IF_Undefined, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, mir_sdr_CHANGE_GR);
+         sdrplay_api_Reinit(&gRdB, 0.0, 0.0, sdrplay_api_BW_Undefined, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_GR);
       }
    }
    else
@@ -1043,8 +1004,8 @@ void SoapySDRPlay::writeSetting(const std::string &key, const std::string &value
          bwMode = getBwEnumForRate(reqSampleRate, ifMode);
          if (streamActive)
          {
-            mir_sdr_DecimateControl(0, 1, 1);
-            mir_sdr_Reinit(&gRdB, sampleRate / 1e6, 0.0, bwMode, ifMode, mir_sdr_LO_Undefined, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps, (mir_sdr_ReasonForReinitT)(mir_sdr_CHANGE_FS_FREQ | mir_sdr_CHANGE_BW_TYPE | mir_sdr_CHANGE_IF_TYPE));
+            sdrplay_api_DecimateControl(0, 1, 1);
+            sdrplay_api_Reinit(&gRdB, sampleRate / 1e6, 0.0, bwMode, ifMode, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, (sdrplay_api_ReasonForReinitT)(sdrplay_api_CHANGE_FS_FREQ | sdrplay_api_CHANGE_BW_TYPE | sdrplay_api_CHANGE_IF_TYPE));
          }
       }
    }
@@ -1052,48 +1013,49 @@ void SoapySDRPlay::writeSetting(const std::string &key, const std::string &value
    {
       if (value == "false") IQcorr = 0;
       else                  IQcorr = 1;
-      mir_sdr_DCoffsetIQimbalanceControl(1, IQcorr);
-      //mir_sdr_DCoffsetIQimbalanceControl(IQcorr, IQcorr);
+      sdrplay_api_DCoffsetIQimbalanceControl(1, IQcorr);
+      //sdrplay_api_DCoffsetIQimbalanceControl(IQcorr, IQcorr);
    }
    else if (key == "agc_setpoint")
    {
       setPoint = stoi(value);
-      mir_sdr_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
+      sdrplay_api_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
    }
    else if (key == "extref_ctrl")
    {
       if (value == "false") extRef = 0;
       else                  extRef = 1;
-      if (hwVer == 2) mir_sdr_RSPII_ExternalReferenceControl(extRef);
-      if (hwVer == 3) mir_sdr_rspDuo_ExtRef(extRef);
+      if (hwVer == 2) sdrplay_api_RSPII_ExternalReferenceControl(extRef);
+      if (hwVer == 3) sdrplay_api_rspDuo_ExtRef(extRef);
    }
    else if (key == "biasT_ctrl")
    {
       if (value == "false") biasTen = 0;
       else                  biasTen = 1;
-      if (hwVer == 2) mir_sdr_RSPII_BiasTControl(biasTen);
-      if (hwVer == 3) mir_sdr_rspDuo_BiasT(biasTen);
-      if (hwVer > 253) mir_sdr_rsp1a_BiasT(biasTen);
+      if (hwVer == 2) sdrplay_api_RSPII_BiasTControl(biasTen);
+      if (hwVer == 3) sdrplay_api_rspDuo_BiasT(biasTen);
+      if (hwVer > 253) sdrplay_api_rsp1a_BiasT(biasTen);
    }
    else if (key == "rfnotch_ctrl")
    {
       if (value == "false") notchEn = 0;
       else                  notchEn = 1;
-      if (hwVer == 2) mir_sdr_RSPII_RfNotchEnable(notchEn);
+      if (hwVer == 2) sdrplay_api_RSPII_RfNotchEnable(notchEn);
       if (hwVer == 3)
       {
-        if (tunSel == mir_sdr_rspDuo_Tuner_1 && amPort == 1) mir_sdr_rspDuo_Tuner1AmNotch(notchEn);
-        if (amPort == 0) mir_sdr_rspDuo_BroadcastNotch(notchEn);
+        if (tunSel == sdrplay_api_rspDuo_Tuner_1 && amPort == 1) sdrplay_api_rspDuo_Tuner1AmNotch(notchEn);
+        if (amPort == 0) sdrplay_api_rspDuo_BroadcastNotch(notchEn);
       }
-      if (hwVer > 253) mir_sdr_rsp1a_BroadcastNotch(notchEn);
+      if (hwVer > 253) sdrplay_api_rsp1a_BroadcastNotch(notchEn);
    }
    else if (key == "dabnotch_ctrl")
    {
       if (value == "false") dabNotchEn = 0;
       else                  dabNotchEn = 1;
-      if (hwVer == 3) mir_sdr_rspDuo_DabNotch(dabNotchEn);
-      if (hwVer > 253) mir_sdr_rsp1a_DabNotch(dabNotchEn);
+      if (hwVer == 3) sdrplay_api_rspDuo_DabNotch(dabNotchEn);
+      if (hwVer > 253) sdrplay_api_rsp1a_DabNotch(dabNotchEn);
    }
+#endif
 }
 
 std::string SoapySDRPlay::readSetting(const std::string &key) const

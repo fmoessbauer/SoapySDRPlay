@@ -35,11 +35,7 @@
 #include <cstring>
 #include <algorithm>
 
-#ifdef _WIN32
-#include <mir_sdr.h>
-#else
-#include <mirsdrapi-rsp.h>
-#endif
+#include <sdrplay_api.h>
 
 #define DEFAULT_BUFFER_LENGTH     (65536)
 #define DEFAULT_NUM_BUFFERS       (8)
@@ -222,26 +218,26 @@ private:
      * Internal functions
      ******************************************************************/
 
-    static double getRateForBwEnum(mir_sdr_Bw_MHzT bwEnum);
+    static double getRateForBwEnum(sdrplay_api_Bw_MHzT bwEnum);
 
-    static uint32_t getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, mir_sdr_If_kHzT ifMode);
+    static uint32_t getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, sdrplay_api_If_kHzT ifMode);
 
-    static mir_sdr_Bw_MHzT getBwEnumForRate(double rate, mir_sdr_If_kHzT ifMode);
+    static sdrplay_api_Bw_MHzT getBwEnumForRate(double rate, sdrplay_api_If_kHzT ifMode);
 
-    static  double getBwValueFromEnum(mir_sdr_Bw_MHzT bwEnum);
+    static  double getBwValueFromEnum(sdrplay_api_Bw_MHzT bwEnum);
 
-    static mir_sdr_Bw_MHzT mirGetBwMhzEnum(double bw);
+    static sdrplay_api_Bw_MHzT mirGetBwMhzEnum(double bw);
 
-    static mir_sdr_If_kHzT stringToIF(std::string ifMode);
+    static sdrplay_api_If_kHzT stringToIF(std::string ifMode);
 
-    static std::string IFtoString(mir_sdr_If_kHzT ifkHzT);
+    static std::string IFtoString(sdrplay_api_If_kHzT ifkHzT);
 
     /*******************************************************************
      * Private variables
      ******************************************************************/
     //device settings
-    mir_sdr_Bw_MHzT bwMode;
-    mir_sdr_If_kHzT ifMode;
+    sdrplay_api_Bw_MHzT bwMode;
+    sdrplay_api_If_kHzT ifMode;
     float ver;
 
     int gRdB;
@@ -251,6 +247,10 @@ private:
     int lnaState;
     int hwVer;
 
+    sdrplay_api_DeviceT * dev;
+    sdrplay_api_DeviceParamsT * deviceParams;
+
+    // TODO: check & remove
     //cached settings
     uint32_t sampleRate;
     uint32_t reqSampleRate;
@@ -268,7 +268,7 @@ private:
 
     std::atomic_uint shortsPerWord;
  
-    mir_sdr_AgcControlT agcMode;
+    sdrplay_api_AgcControlT agcMode;
     std::atomic_bool streamActive;
   
     bool dcOffsetMode;
@@ -277,8 +277,8 @@ private:
     unsigned int IQcorr;
     int setPoint;
 
-    mir_sdr_RSPII_AntennaSelectT antSel;
-    mir_sdr_rspDuo_TunerSelT tunSel;
+    sdrplay_api_Rsp2_AntennaSelectT antSel;
+    sdrplay_api_TunerSelectT tunSel;
     int amPort;
     unsigned int extRef;
     unsigned int biasTen;
