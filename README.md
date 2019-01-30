@@ -1,12 +1,18 @@
 # Soapy SDR module for SDRPlay
 
+**Not for production / early development state**
+
+- Partially tested with RspDuo
+- Only tested on Linux
+- Only works with v3.x driver
+
 ## Documentation
 
 * https://github.com/pothosware/SoapySDRPlay/wiki
 
 ## Dependencies
 
-* Get SDR Play driver binaries 'API/HW driver v2.x' (not v3.x) from - http://sdrplay.com/downloads
+* Get SDR Play driver binaries 'API/HW driver v3.x' (not v2.x) from - http://sdrplay.com/downloads
 * SoapySDR - https://github.com/pothosware/SoapySDR/wiki
 
 ## Licensing information
