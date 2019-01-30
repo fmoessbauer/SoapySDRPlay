@@ -269,6 +269,7 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
        //throw std::runtime_error("StreamInit Error: " + std::to_string(err));
        return SOAPY_SDR_NOT_SUPPORTED;
     }
+    // TODO: on which channel / tuner?
     //mir_sdr_DecimateControl(decEnable, decM, 1);
 
     //mir_sdr_SetDcMode(4,0);
@@ -434,3 +435,4 @@ void SoapySDRPlay::releaseReadBuffer(SoapySDR::Stream *stream, const size_t hand
     _buffs[handle].clear();
     _buf_count--;
 }
+

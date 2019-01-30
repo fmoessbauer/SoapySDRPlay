@@ -77,11 +77,13 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
 
     sdrplay_api_LockDeviceApi();
     sdrplay_api_SelectDevice(&rspDevs[devIdx]);
-    dev = &rspDevs[devIdx];
+    dev = rspDevs[devIdx].dev;
     sdrplay_api_UnlockDeviceApi();
     deviceSelected = true;
 
-    sdrplay_api_GetDeviceParams(dev, &deviceParams);
+    auto err = sdrplay_api_GetDeviceParams(dev, &deviceParams);
+    if(err != sdrplay_api_Success)
+      SoapySDR_logf(SOAPY_SDR_WARNING, "failed to get device parameters");
 
     // we do not change any values
     #if 0
@@ -210,6 +212,7 @@ std::vector<std::string> SoapySDRPlay::listAntennas(const int direction, const s
 void SoapySDRPlay::setAntenna(const int direction, const size_t channel, const std::string &name)
 {
   std::lock_guard <std::mutex> lock(_general_state_mutex);
+  auto tuner = sdrplay_api_Tuner_A;
 
   if ((direction != SOAPY_SDR_RX) || (hwVer == SDRPLAY_RSP1_ID) || (hwVer > 253)) {
     return;
@@ -233,12 +236,13 @@ void SoapySDRPlay::setAntenna(const int direction, const size_t channel, const s
         deviceParams->rxChannelA->rspDuoTunerParams.tuner1AmPortSel = sdrplay_api_RspDuo_AMPORT_2;
       }
     } else if(channel == 1){
+        tuner = sdrplay_api_Tuner_B;
         if(name == "Tuner 2 50 ohm"){
           // just one antenna on this tuner
         }
       }
   }
-  sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Rsp2_AntennaControl);
+  sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Rsp2_AntennaControl);
 }
 
 std::string SoapySDRPlay::getAntenna(const int direction, const size_t channel) const
@@ -284,10 +288,11 @@ void SoapySDRPlay::setDCOffsetMode(const int direction, const size_t channel, co
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
     auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+    auto tuner     = (channel == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
 
     rxChannel->ctrlParams.dcOffset.DCenable = automatic;
     // TODO: possibly add IQenable as well
-    sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Ctrl_DCoffsetIQimbalance);
+    sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_DCoffsetIQimbalance);
 }
 
 bool SoapySDRPlay::getDCOffsetMode(const int direction, const size_t channel) const
@@ -330,6 +335,7 @@ void SoapySDRPlay::setGainMode(const int direction, const size_t channel, const 
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
     auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+    auto tuner     = (channel == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
     auto agcMode = sdrplay_api_AGC_DISABLE;
 
     if (automatic == true) {
@@ -341,7 +347,7 @@ void SoapySDRPlay::setGainMode(const int direction, const size_t channel, const 
     agc.enable = agcMode;
     //agc.setPoint = setPoint;
 
-    sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Ctrl_Agc);
+    sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_Agc);
 }
 
 bool SoapySDRPlay::getGainMode(const int direction, const size_t channel) const
@@ -357,6 +363,7 @@ void SoapySDRPlay::setGain(const int direction, const size_t channel, const std:
    std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    bool doUpdate = false;
+    auto tuner     = (channel == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
 
    if (name == "IFGR")
    {
@@ -380,7 +387,7 @@ void SoapySDRPlay::setGain(const int direction, const size_t channel, const std:
    }
   if ((doUpdate == true) && (streamActive))
   {
-    sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Tuner_Gr);
+    sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Tuner_Gr);
   }
 }
 
@@ -438,6 +445,7 @@ void SoapySDRPlay::setFrequency(const int direction,
   std::lock_guard <std::mutex> lock(_general_state_mutex);
 
   auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+  auto tuner     = (channel == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
 
   if (direction == SOAPY_SDR_RX)
   {
@@ -447,13 +455,13 @@ void SoapySDRPlay::setFrequency(const int direction,
         rxChannel->tunerParams.rfFreq.rfHz = frequency;
         if (streamActive)
         {
-          sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Tuner_Frf);
+          sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Tuner_Frf);
         }
       }
       else if ((name == "CORR") && (ppm != frequency))
       {
          deviceParams->devParams->ppm = frequency;
-         sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Dev_Ppm);
+         sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Dev_Ppm);
       }
    }
 }
@@ -516,6 +524,7 @@ void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, cons
       reqSampleRate = (uint32_t)rate;
       uint32_t currSampleRate = (uint32_t) deviceParams->devParams->fsFreq.fsHz;
       auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+      auto tuner     = (channel == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
       auto ifMode = rxChannel->tunerParams.ifType;
 
       sampleRate = getInputSampleRateAndDecimation(reqSampleRate, &decM, &decEnable, ifMode);
@@ -534,7 +543,7 @@ void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, cons
               reason |= (uint32_t) sdrplay_api_Update_Ctrl_Decimation;
               rxChannel->ctrlParams.decimation.enable = (bool)decEnable;
             }
-            sdrplay_api_Update(dev, dev->tuner, (sdrplay_api_ReasonForUpdateT) reason);
+            sdrplay_api_Update(dev, tuner, (sdrplay_api_ReasonForUpdateT) reason);
           }
        }
     }
@@ -598,6 +607,7 @@ void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const
 {
     std::lock_guard <std::mutex> lock(_general_state_mutex);
     auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+    auto tuner     = (channel == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
 
    if (direction == SOAPY_SDR_RX) 
    {
@@ -608,7 +618,7 @@ void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const
          rxChannel->tunerParams.bwType = bwMode;
          if (streamActive)
          {
-           sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Tuner_BwType);
+           sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Tuner_BwType);
          }
       }
    }
@@ -617,11 +627,17 @@ void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const
 double SoapySDRPlay::getBandwidth(const int direction, const size_t channel) const
 {
     std::lock_guard <std::mutex> lock(_general_state_mutex);
+    if(nullptr == deviceParams){
+      SoapySDR_logf(SOAPY_SDR_WARNING, "no device params");
+    }
     auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
 
    if (direction == SOAPY_SDR_RX)
    {
-      return getBwValueFromEnum(rxChannel->tunerParams.bwType);
+     if(nullptr == rxChannel)
+       SoapySDR_logf(SOAPY_SDR_WARNING, "no RX Channel");
+     else
+       return getBwValueFromEnum(rxChannel->tunerParams.bwType);
    }
    return 0;
 }

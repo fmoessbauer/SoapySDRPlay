@@ -247,7 +247,7 @@ private:
     int lnaState[2];
     int hwVer;
 
-    sdrplay_api_DeviceT * dev;
+    HANDLE dev;
     sdrplay_api_DeviceParamsT * deviceParams;
 
     // TODO: check & remove
