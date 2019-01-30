@@ -327,79 +327,77 @@ bool SoapySDRPlay::hasGainMode(const int direction, const size_t channel) const
 
 void SoapySDRPlay::setGainMode(const int direction, const size_t channel, const bool automatic)
 {
-#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
-    agcMode = sdrplay_api_AGC_DISABLE;
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+    auto agcMode = sdrplay_api_AGC_DISABLE;
 
     if (automatic == true) {
         agcMode = sdrplay_api_AGC_100HZ;
         //align known agc values with current value before starting AGC.
-        current_gRdB = gRdB;
+        current_gRdB[channel] = gRdB[channel];
     }
-    sdrplay_api_AgcControl(agcMode, setPoint, 0, 0, 0, 0, lnaState);
-#endif
+    auto & agc = rxChannel->ctrlParams.agc;
+    agc.enable = agcMode;
+    //agc.setPoint = setPoint;
+
+    sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Ctrl_Agc);
 }
 
 bool SoapySDRPlay::getGainMode(const int direction, const size_t channel) const
 {
-#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
 
-    return (agcMode == sdrplay_api_AGC_DISABLE)? false: true;
-#endif
+    return (rxChannel->ctrlParams.agc.enable == sdrplay_api_AGC_DISABLE)? false: true;
 }
 
 void SoapySDRPlay::setGain(const int direction, const size_t channel, const std::string &name, const double value)
 {
-#if 0
    std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    bool doUpdate = false;
 
    if (name == "IFGR")
    {
-      //Depending of the previously used AGC context, the real applied 
-      // gain may be either gRdB or current_gRdB, so apply the change if required value is different 
-      //from one of them.
-      if ((gRdB != (int)value) || (current_gRdB != (int)value))
+      // Depending of the previously used AGC context, the real applied
+      // gain may be either gRdB or current_gRdB, so apply the change if required value is different
+      // from one of them.
+      if ((gRdB[channel] != (int)value) || (current_gRdB[channel] != (int)value))
       {
-         gRdB = (int)value;
-         current_gRdB = (int)value;
+         gRdB[channel] = (int)value;
+         current_gRdB[channel] = (int)value;
          doUpdate = true;
       }
    }
    else if (name == "RFGR")
    {
-      if (lnaState != (int)value) {
+      if (lnaState[channel] != (int)value) {
 
-          lnaState = (int)value;
+          lnaState[channel] = (int)value;
           doUpdate = true;
       }
    }
-   if ((doUpdate == true) && (streamActive))
-   {
-      sdrplay_api_Reinit(&gRdB, 0.0, 0.0, sdrplay_api_BW_Undefined, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_GR);
-   }
-#endif
+  if ((doUpdate == true) && (streamActive))
+  {
+    sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Tuner_Gr);
+  }
 }
 
 double SoapySDRPlay::getGain(const int direction, const size_t channel, const std::string &name) const
 {
-#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
    if (name == "IFGR")
    {
-       return current_gRdB;
+       return current_gRdB[channel];
    }
    else if (name == "RFGR")
    {
-      return lnaState;
+      return lnaState[channel];
    }
 
    return 0;
-#endif
 }
 
 SoapySDR::Range SoapySDRPlay::getGainRange(const int direction, const size_t channel, const std::string &name) const
@@ -437,39 +435,41 @@ void SoapySDRPlay::setFrequency(const int direction,
                                 const double frequency,
                                 const SoapySDR::Kwargs &args)
 {
-#if 0
-    std::lock_guard <std::mutex> lock(_general_state_mutex);
+  std::lock_guard <std::mutex> lock(_general_state_mutex);
 
-   if (direction == SOAPY_SDR_RX)
-   {
+  auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+
+  if (direction == SOAPY_SDR_RX)
+  {
+    uint32_t centerFrequency = (uint32_t) rxChannel->tunerParams.rfFreq.rfHz;
       if ((name == "RF") && (centerFrequency != (uint32_t)frequency))
       {
-         centerFrequency = (uint32_t)frequency;
-         if (streamActive)
-         {
-            sdrplay_api_Reinit(&gRdB, 0.0, frequency / 1e6, sdrplay_api_BW_Undefined, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_RF_FREQ);
-         }
+        rxChannel->tunerParams.rfFreq.rfHz = frequency;
+        if (streamActive)
+        {
+          sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Tuner_Frf);
+        }
       }
       else if ((name == "CORR") && (ppm != frequency))
       {
-         ppm = frequency;
-         sdrplay_api_SetPpm(ppm);
+         deviceParams->devParams->ppm = frequency;
+         sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Dev_Ppm);
       }
    }
-#endif
 }
 
 double SoapySDRPlay::getFrequency(const int direction, const size_t channel, const std::string &name) const
 {
     std::lock_guard <std::mutex> lock(_general_state_mutex);
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
 
     if (name == "RF")
     {
-        return (double)centerFrequency;
+        return rxChannel->tunerParams.rfFreq.rfHz;
     }
     else if (name == "CORR")
     {
-        return ppm;
+        return deviceParams->devParams->ppm;
     }
 
     return 0;
@@ -506,39 +506,43 @@ SoapySDR::ArgInfoList SoapySDRPlay::getFrequencyArgsInfo(const int direction, co
 
 void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, const double rate)
 {
-#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
     SoapySDR_logf(SOAPY_SDR_DEBUG, "Setting sample rate: %d", sampleRate);
 
     if (direction == SOAPY_SDR_RX)
     {
-       unsigned int decMp = decM;
-       reqSampleRate = (uint32_t)rate;
-       uint32_t currSampleRate = sampleRate;
+      unsigned int decMp = decM;
+      reqSampleRate = (uint32_t)rate;
+      uint32_t currSampleRate = (uint32_t) deviceParams->devParams->fsFreq.fsHz;
+      auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+      auto ifMode = rxChannel->tunerParams.ifType;
 
-       sampleRate = getInputSampleRateAndDecimation(reqSampleRate, &decM, &decEnable, ifMode);
-       bwMode = getBwEnumForRate(rate, ifMode);
+      sampleRate = getInputSampleRateAndDecimation(reqSampleRate, &decM, &decEnable, ifMode);
+      bwMode = getBwEnumForRate(rate, ifMode);
 
        if ((sampleRate != currSampleRate) || (decM != decMp) || (reqSampleRate != sampleRate))
        {
           resetBuffer = true;
           if (streamActive)
           {
-             sdrplay_api_Reinit(&gRdB, sampleRate / 1e6, 0.0, bwMode, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, (sdrplay_api_ReasonForReinitT)(sdrplay_api_CHANGE_FS_FREQ | sdrplay_api_CHANGE_BW_TYPE));
-             if (ifMode == sdrplay_api_IF_Zero)
-             {
-                sdrplay_api_DecimateControl(decEnable, decM, 1);
-             }
+            uint32_t reason = (uint32_t) sdrplay_api_Update_Dev_Fs;
+            deviceParams->devParams->fsFreq.fsHz = (double) sampleRate;
+
+            if (ifMode == sdrplay_api_IF_Zero)
+            {
+              reason |= (uint32_t) sdrplay_api_Update_Ctrl_Decimation;
+              rxChannel->ctrlParams.decimation.enable = (bool)decEnable;
+            }
+            sdrplay_api_Update(dev, dev->tuner, (sdrplay_api_ReasonForUpdateT) reason);
           }
        }
     }
-#endif
 }
 
 double SoapySDRPlay::getSampleRate(const int direction, const size_t channel) const
 {
-   return reqSampleRate;
+   return deviceParams->devParams->fsFreq.fsHz;
 }
 
 std::vector<double> SoapySDRPlay::listSampleRates(const int direction, const size_t channel) const
@@ -558,13 +562,12 @@ std::vector<double> SoapySDRPlay::listSampleRates(const int direction, const siz
     rates.push_back(8000000);
     rates.push_back(9000000);
     rates.push_back(10000000);
-    
+
     return rates;
 }
 
 uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, sdrplay_api_If_kHzT ifMode)
 {
-#if 0
    if (ifMode == sdrplay_api_IF_2_048)
    {
       if      (rate == 2048000) { *decM = 4; *decEnable = 1; return 8192000; }
@@ -585,7 +588,6 @@ uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned i
 
    // this is invalid, but return something
    *decM = 1; *decEnable = 0; return rate;
-#endif
 }
 
 /*******************************************************************
@@ -594,34 +596,34 @@ uint32_t SoapySDRPlay::getInputSampleRateAndDecimation(uint32_t rate, unsigned i
 
 void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const double bw_in)
 {
-#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
 
    if (direction == SOAPY_SDR_RX) 
    {
+      auto bwMode = rxChannel->tunerParams.bwType;
       if (getBwValueFromEnum(bwMode) != bw_in)
       {
          bwMode = mirGetBwMhzEnum(bw_in);
+         rxChannel->tunerParams.bwType = bwMode;
          if (streamActive)
          {
-            sdrplay_api_Reinit(&gRdB, 0.0, 0.0, bwMode, sdrplay_api_IF_Undefined, sdrplay_api_LO_Undefined, lnaState, &gRdBsystem, sdrplay_api_USE_RSP_SET_GR, &sps, sdrplay_api_CHANGE_BW_TYPE);
+           sdrplay_api_Update(dev, dev->tuner, sdrplay_api_Update_Tuner_BwType);
          }
       }
    }
-#endif
 }
 
 double SoapySDRPlay::getBandwidth(const int direction, const size_t channel) const
 {
-#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
+    auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
 
    if (direction == SOAPY_SDR_RX)
    {
-      return getBwValueFromEnum(bwMode);
+      return getBwValueFromEnum(rxChannel->tunerParams.bwType);
    }
    return 0;
-#endif
 }
 
 std::vector<double> SoapySDRPlay::listBandwidths(const int direction, const size_t channel) const
@@ -1060,6 +1062,7 @@ void SoapySDRPlay::writeSetting(const std::string &key, const std::string &value
 
 std::string SoapySDRPlay::readSetting(const std::string &key) const
 {
+#if 0
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
 #ifdef RF_GAIN_IN_MENU
@@ -1114,4 +1117,5 @@ std::string SoapySDRPlay::readSetting(const std::string &key) const
 
     // SoapySDR_logf(SOAPY_SDR_WARNING, "Unknown setting '%s'", key.c_str());
     return "";
+#endif
 }

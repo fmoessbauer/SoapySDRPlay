@@ -240,11 +240,11 @@ private:
     sdrplay_api_If_kHzT ifMode;
     float ver;
 
-    int gRdB;
-    std::atomic_int current_gRdB;
+    int gRdB[2];
+    std::atomic_int current_gRdB[2];
     int gRdBsystem;
     int sps;
-    int lnaState;
+    int lnaState[2];
     int hwVer;
 
     sdrplay_api_DeviceT * dev;
