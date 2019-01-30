@@ -32,6 +32,9 @@ static sdrplay_api_DeviceT rspDevs[MAX_RSP_DEVICES];
 
 SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
 {
+  using RxChannelT = sdrplay_api_RxChannelParamsT;
+  std::vector<RxChannelT*> channels;
+
     std::string label = args.at("label");
     std::string baseLabel = "SDRplay Dev";
 
@@ -81,41 +84,51 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
     sdrplay_api_UnlockDeviceApi();
     deviceSelected = true;
 
+    // Set Dual-Tuner mode
+    rspDevs[devIdx].rspDuoMode = sdrplay_api_RspDuoMode_Dual_Tuner;
+
     auto err = sdrplay_api_GetDeviceParams(dev, &deviceParams);
     if(err != sdrplay_api_Success)
       SoapySDR_logf(SOAPY_SDR_WARNING, "failed to get device parameters");
 
-    // we do not change any values
-    #if 0
-    sampleRate = 2000000;
-    reqSampleRate = sampleRate;
-    decM = 1;
-    decEnable = 0;
-    centerFrequency = 100;
-    ppm = 0.0;
-    ifMode = sdrplay_api_IF_Zero;
-    bwMode = sdrplay_api_BW_1_536;
-    gRdB = 40;
-    lnaState = (hwVer == 2 || hwVer == 3 || hwVer > 253)? 4: 1;
+    deviceParams->devParams->fsFreq.fsHz = 2000000;
+    reqSampleRate                        = sampleRate;
+    deviceParams->devParams->ppm         = 0.0;
+
+    // per channel settings
+    channels.push_back(deviceParams->rxChannelA);
+    if(hwVer == SDRPLAY_RSPduo_ID)
+      channels.push_back(deviceParams->rxChannelB);
+
+    for(const auto & chan : channels){
+      chan->ctrlParams.decimation.enable = false;
+      chan->ctrlParams.agc.enable        = sdrplay_api_AGC_100HZ;
+      chan->ctrlParams.agc.setPoint_dBfs = -30;
+      chan->ctrlParams.dcOffset.DCenable = 1;
+      chan->ctrlParams.dcOffset.IQenable = 1;
+
+      chan->tunerParams.rfFreq.rfHz = 100;
+      chan->tunerParams.ifType = sdrplay_api_IF_Zero;
+      chan->tunerParams.bwType = sdrplay_api_BW_1_536;
+      chan->tunerParams.gain.gRdB = 40;
+      chan->tunerParams.gain.LNAstate = (hwVer == SDRPLAY_RSP2_ID || hwVer == SDRPLAY_RSPduo_ID || hwVer > 253)? 4: 1;
+
+      if(hwVer == SDRPLAY_RSPduo_ID){
+        chan->rspDuoTunerParams.biasTEnable      = false;
+        chan->rspDuoTunerParams.rfNotchEnable    = false;
+        chan->rspDuoTunerParams.rfDabNotchEnable = false;
+      }
+    }
+
+    if(hwVer == SDRPLAY_RSPduo_ID){
+      deviceParams->rxChannelA->rspDuoTunerParams.tuner1AmPortSel = sdrplay_api_RspDuo_AMPORT_2;
+      deviceParams->devParams->rspDuoParams.extRefOutputEn = 0;
+    }
+    // TODO: other receivers
 
     //this may change later according to format
     shortsPerWord = 1;
     bufferLength = bufferElems * elementsPerSample * shortsPerWord;
-
-    agcMode = sdrplay_api_AGC_100HZ;
-    dcOffsetMode = true;
-
-    IQcorr = 1;
-    setPoint = -30;
-
-    antSel = sdrplay_api_Rsp2_ANTENNA_A;
-    tunSel = rspDevs[devIdx].tuner; // TODO
-    amPort = sdrplay_api_Rsp2_AMPORT_1; // TODO
-    extRef = 0;
-    biasTen = 0;
-    notchEn = 0;
-    dabNotchEn = 0;
-#endif
 
     bufferedElems = 0;
     _currentBuff = 0;
@@ -627,17 +640,11 @@ void SoapySDRPlay::setBandwidth(const int direction, const size_t channel, const
 double SoapySDRPlay::getBandwidth(const int direction, const size_t channel) const
 {
     std::lock_guard <std::mutex> lock(_general_state_mutex);
-    if(nullptr == deviceParams){
-      SoapySDR_logf(SOAPY_SDR_WARNING, "no device params");
-    }
     auto rxChannel = (channel == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
 
    if (direction == SOAPY_SDR_RX)
    {
-     if(nullptr == rxChannel)
-       SoapySDR_logf(SOAPY_SDR_WARNING, "no RX Channel");
-     else
-       return getBwValueFromEnum(rxChannel->tunerParams.bwType);
+    return getBwValueFromEnum(rxChannel->tunerParams.bwType);
    }
    return 0;
 }
