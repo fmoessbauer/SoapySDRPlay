@@ -59,8 +59,10 @@ static void _rx_callback(
   unsigned int reset,
   void *cbContext)
 {
-    SoapySDRPlay *self = (SoapySDRPlay *)cbContext;
-    return self->rx_callback(xi, xq, numSamples);
+#if 1
+    StreamData *pstream = (StreamData *)cbContext;
+    return SoapySDRPlay::rx_callback(pstream, xi, xq, numSamples);
+#endif
 }
 
 static void _gr_callback(
@@ -69,63 +71,67 @@ static void _gr_callback(
   sdrplay_api_EventParamsT *params,
   void *cbContext)
 {
-    SoapySDRPlay *self = (SoapySDRPlay *)cbContext;
+    StreamData *pstream = (StreamData *)cbContext;
     //return self->gr_callback(gRdB, lnaGRdB); // TODO
 }
 
-void SoapySDRPlay::rx_callback(short *xi, short *xq, unsigned int numSamples)
+void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples)
 {
-    std::lock_guard<std::mutex> lock(_buf_mutex);
+  // retract block from pool
+  // fill block
+  // enqueue
 
-    if (_buf_count == numBuffers)
-    {
-        _overflowEvent = true;
-        return;
+  // this should not be required as we always start a new block
+  int spaceReqd = numSamples * pstream->_elements_per_sample * pstream->_shorts_per_word;
+  StreamBlock * block = pstream->_cur_write_block;
+  // check space in currently opened block
+  // TODO: what is decm
+  auto decM = 1;
+//  if((block->_size + spaceReqd) >= (pstream->_buffer_size / decM)){
+//    // release current block
+//    if(!pstream->_queue.try_enqueue(block)){
+//      // TODO this must not happen (as number of blocks is fixed)
+//      throw std::runtime_error("try to add unavailable block");
+//    }
+
+    // fetch a new block
+    if(!pstream->_pool.try_dequeue(block)){
+      pstream->_overflow_event = true;
+      return;
     }
-    
-    int spaceReqd = numSamples * elementsPerSample * shortsPerWord;
-    if ((_buffs[_buf_tail].size() + spaceReqd) >= (bufferLength / decM))
-    {
-       // increment the tail pointer and buffer count
-       _buf_tail = (_buf_tail + 1) % numBuffers;
-       _buf_count++;
+//  }
+  // TODO: find way to merge individual streams
 
-       // notify readStream()
-       _buf_cond.notify_one();
-    }
+  auto * beg = block->_buffers[0].data() + block->_size;
+  block->_size += spaceReqd;
 
-    // get current fill buffer
-    auto &buff = _buffs[_buf_tail];
-    buff.resize(buff.size() + spaceReqd);
-
-    // copy into the buffer queue
-    unsigned int i = 0;
-
-    if (useShort)
-    {
-       short *dptr = buff.data();
-       dptr += (buff.size() - spaceReqd);
-       for (i = 0; i < numSamples; i++)
-       {
-           *dptr++ = xi[i];
-           *dptr++ = xq[i];
-        }
-    }
-    else
-    {
-       float *dptr = (float *)buff.data();
-       dptr += ((buff.size() - spaceReqd) / shortsPerWord);
-       for (i = 0; i < numSamples; i++)
-       {
-          *dptr++ = (float)xi[i] / 32768.0f;
-          *dptr++ = (float)xq[i] / 32768.0f;
-       }
-    }
-
-    return;
+  //SoapySDR_log(SOAPY_SDR_INFO, "test");
+  if (pstream->_shorts_per_word == 1)
+  {
+     short *dptr = (short*) beg;
+     for (unsigned i = 0; i < numSamples; i++)
+     {
+         *dptr++ = xi[i];
+         *dptr++ = xq[i];
+      }
+  }
+  else
+  {
+     float *dptr = (float*) beg;
+     for (unsigned i = 0; i < numSamples; i++)
+     {
+        *dptr++ = (float)xi[i] / 32768.0f;
+        *dptr++ = (float)xq[i] / 32768.0f;
+     }
+  }
+  // release block
+  if(!pstream->_queue.try_enqueue(block)){
+    throw std::runtime_error("try to add unavailable block");
+  }
+  return;
 }
 
-void SoapySDRPlay::gr_callback(unsigned int gRdB, unsigned int lnaGRdB)
+void SoapySDRPlay::gr_callback(StreamData * pstream, unsigned int gRdB, unsigned int lnaGRdB)
 {
 #if 0
     //Beware, lnaGRdB is really the LNA GR, NOT the LNA state !
@@ -173,6 +179,7 @@ SoapySDR::Stream *SoapySDRPlay::setupStream(const int direction,
 //       throw std::runtime_error("setupStream invalid channel selection");
 //    }
     
+    unsigned shortsPerWord;
     // check the format
     if (format == "CS16") 
     {
@@ -196,17 +203,12 @@ SoapySDR::Stream *SoapySDRPlay::setupStream(const int direction,
 
     std::lock_guard<std::mutex> lock(_buf_mutex);
 
-    // clear async fifo counts
-    _buf_tail = 0;
-    _buf_head = 0;
-    _buf_count = 0;
-
-    // allocate buffers
-    _buffs.resize(numBuffers);
-    for (auto &buff : _buffs) buff.reserve(bufferLength);
-    for (auto &buff : _buffs) buff.clear();
-
-    return (SoapySDR::Stream *) this;
+    StreamData * pstream = new StreamData(DEFAULT_NUM_BUFFERS, DEFAULT_BUFFER_LENGTH, shortsPerWord, channels);
+    if(!pstream->_pool.try_dequeue(pstream->_cur_write_block)){
+      throw std::runtime_error("no block in object pool");
+    }
+    assert(pstream->_cur_write_block->_buffers[0].size() > 0);
+    return (SoapySDR::Stream *) pstream;
 }
 
 void SoapySDRPlay::closeStream(SoapySDR::Stream *stream)
@@ -217,13 +219,15 @@ void SoapySDRPlay::closeStream(SoapySDR::Stream *stream)
     {
       sdrplay_api_Uninit(dev);
     }
+    delete ((StreamData *) stream);
+
     streamActive = false;
 }
 
 size_t SoapySDRPlay::getStreamMTU(SoapySDR::Stream *stream) const
 {
     // is a constant in practice
-    return bufferElems;
+    return DEFAULT_BUFFER_LENGTH;
 }
 
 int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
@@ -235,10 +239,7 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
     {
         return SOAPY_SDR_NOT_SUPPORTED;
     }
-   
     resetBuffer = true;
-    bufferedElems = 0;
-    
     sdrplay_api_ErrT err;
     
     std::lock_guard <std::mutex> lock(_general_state_mutex);
@@ -258,7 +259,7 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
     cbFns.StreamBCbFn = NULL;
     cbFns.EventCbFn = _gr_callback;
 
-    err = sdrplay_api_Init(dev, &cbFns, (void*)this);
+    err = sdrplay_api_Init(dev, &cbFns, (void*)stream);
 
 //    err = mir_sdr_StreamInit(&gRdB, sampleRate / 1e6, centerFrequency / 1e6, bwMode,
 //                             ifMode, lnaState, &gRdBsystem, mir_sdr_USE_RSP_SET_GR, &sps,
@@ -295,7 +296,7 @@ int SoapySDRPlay::deactivateStream(SoapySDR::Stream *stream, const int flags, co
     }
 
     streamActive = false;
-    
+
     return 0;
 }
 
@@ -311,50 +312,54 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
         return 0;
     }
     
-    // this is the user's buffer for channel 0
-    void *buff0 = buffs[0];
-    
+    auto * pstream = (StreamData *) stream;
+    void* source_buffs[2];
+
     // are elements left in the buffer? if not, do a new read.
-    if (bufferedElems == 0)
+    if (pstream->_read_remaining == 0)
     {
-        int ret = this->acquireReadBuffer(stream, _currentHandle, (const void **)&_currentBuff, flags, timeNs, timeoutUs);
-  
+        // TODO
+        size_t unused = 0;
+        int ret = this->acquireReadBuffer(stream, unused, (const void **)&source_buffs, flags, timeNs, timeoutUs);
+
         if (ret < 0)
         {
             return ret;
         }
-        bufferedElems = ret;
+        pstream->_read_remaining = ret;
+    } else {
+      assert(nullptr != pstream->_cur_read_block);
+      for(size_t i=0; i<pstream->_channels.size(); ++i){
+        source_buffs[i] = pstream->_cur_read_block->_buffers[i].data();
+      }
     }
 
-    size_t returnedElems = std::min(bufferedElems.load(), numElems);
+    size_t returnedElems = std::min((size_t)pstream->_read_remaining, numElems);
 
-    // copy into user's buff0
-    if (useShort)
-    {
-        std::memcpy(buff0, _currentBuff, returnedElems * 2 * sizeof(short));
-    }
-    else
-    {
-        std::memcpy(buff0, (float *)_currentBuff, returnedElems * 2 * sizeof(float));
+    for(size_t i=0; i<pstream->_channels.size(); ++i){
+      // copy into user's buff0
+      if (useShort)
+      {
+          std::memcpy(buffs[i], source_buffs[i], returnedElems * 2 * sizeof(short));
+      }
+      else
+      {
+          std::memcpy(buffs[i], (float *)(source_buffs[i]), returnedElems * 2 * sizeof(float));
+      }
     }
     
     // bump variables for next call into readStream
-    bufferedElems -= returnedElems;
-
-    // scope lock here to update _currentBuff position
-    {
-        std::lock_guard <std::mutex> lock(_buf_mutex);
-        _currentBuff += returnedElems * elementsPerSample * shortsPerWord;
-    }
+    pstream->_read_remaining -= returnedElems;
 
     // return number of elements written to buff0
-    if (bufferedElems != 0)
+    if (pstream->_read_remaining != 0)
     {
         flags |= SOAPY_SDR_MORE_FRAGMENTS;
     }
     else
     {
-        this->releaseReadBuffer(stream, _currentHandle);
+        // todo
+        this->releaseReadBuffer(stream, (size_t)pstream->_cur_read_block);
     }
     return (int)returnedElems;
 }
@@ -365,17 +370,17 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
 
 size_t SoapySDRPlay::getNumDirectAccessBuffers(SoapySDR::Stream *stream)
 {
-    std::lock_guard <std::mutex> lock(_buf_mutex);
-
-    return _buffs.size();
+    return ((StreamData*) stream)->_streamblocks.size();
 }
 
 int SoapySDRPlay::getDirectAccessBufferAddrs(SoapySDR::Stream *stream, const size_t handle, void **buffs)
 {
-    std::lock_guard <std::mutex> lock(_buf_mutex);
+    auto * pstream = (StreamData *) stream;
 
-    buffs[0] = (void *)_buffs[handle].data();
-    return 0;
+  for(size_t i=0; i<pstream->_channels.size(); ++i){
+    buffs[i] = (void *)pstream->_streamblocks[handle]._buffers[i].data();
+  }
+  return 0;
 }
 
 int SoapySDRPlay::acquireReadBuffer(SoapySDR::Stream *stream,
@@ -385,54 +390,45 @@ int SoapySDRPlay::acquireReadBuffer(SoapySDR::Stream *stream,
                                     long long &timeNs,
                                     const long timeoutUs)
 {
-    std::unique_lock <std::mutex> lock(_buf_mutex);
+    auto * pstream = (StreamData *) stream;
+    if (resetBuffer || pstream->_overflow_event){
+      // drain queue
+      StreamBlock * item;
+      while(pstream->_queue.try_dequeue(item)){
+        pstream->_pool.try_enqueue(item);
+      }
+      pstream->_overflow_event = false;
+      if(resetBuffer){
+        resetBuffer = false;
+      } else {
+        SoapySDR_log(SOAPY_SDR_SSI, "O");
+        return SOAPY_SDR_OVERFLOW;
+      }
 
-    // reset is issued by various settings
-    // overflow set in the rx callback thread
-    if (resetBuffer || _overflowEvent)
-    {
-        // drain all buffers from the fifo
-        _buf_tail = 0;
-        _buf_head = 0;
-        _buf_count = 0;
-        for (auto &buff : _buffs) buff.clear();
-        _overflowEvent = false;
-        if (resetBuffer)
-        {
-           resetBuffer = false;
-        }
-        else
-        {
-           SoapySDR_log(SOAPY_SDR_SSI, "O");
-           return SOAPY_SDR_OVERFLOW;
-        }
     }
-
-    // wait for a buffer to become available
-    if (_buf_count == 0)
-    {
-        _buf_cond.wait_for(lock, std::chrono::microseconds(timeoutUs));
-        if (_buf_count == 0) 
-        {
-           return SOAPY_SDR_TIMEOUT;
-        }
+    StreamBlock * read_block = nullptr;
+    if(!pstream->_queue.wait_dequeue_timed(read_block, std::chrono::microseconds(timeoutUs))){
+      SoapySDR_log(SOAPY_SDR_WARNING, "Timeout");
+      return SOAPY_SDR_TIMEOUT;
     }
-
-    // extract handle and buffer
-    handle = _buf_head;
-    buffs[0] = (void *)_buffs[handle].data();
-    flags = 0;
-
-    _buf_head = (_buf_head + 1) % numBuffers;
+    pstream->_cur_read_block = read_block;
+    pstream->_read_remaining = read_block->_size;
+    for(size_t i=0;i<pstream->_channels.size(); ++i){
+      buffs[i] = read_block->_buffers[i].data();
+    }
 
     // return number available
-    return (int)(_buffs[handle].size() / (elementsPerSample * shortsPerWord));
+    return read_block->_size;
 }
 
 void SoapySDRPlay::releaseReadBuffer(SoapySDR::Stream *stream, const size_t handle)
 {
-    std::lock_guard <std::mutex> lock(_buf_mutex);
-    _buffs[handle].clear();
-    _buf_count--;
+    auto * pstream = (StreamData *) stream;
+    auto * block = pstream->_cur_read_block;
+    block->_size = 0;
+    if(!pstream->_pool.try_enqueue(block)){
+      throw std::runtime_error("cannot re-insert block to object pool");
+    }
+    pstream->_cur_read_block = nullptr;
 }
 

@@ -37,9 +37,54 @@
 
 #include <sdrplay_api.h>
 
+#include "rwqueue/atomicops.h"
+#include "rwqueue/readerwriterqueue.h"
+
 #define DEFAULT_BUFFER_LENGTH     (65536)
 #define DEFAULT_NUM_BUFFERS       (8)
 #define DEFAULT_ELEMS_PER_SAMPLE  (2)
+
+struct StreamBlock {
+  public:
+  std::array<std::vector<short>,2> _buffers;
+  short _size{0};
+
+  StreamBlock(size_t mtu){
+    _buffers[0].resize(mtu);
+    _buffers[1].resize(mtu);
+  }
+};
+
+class StreamData {
+  using QueueT = moodycamel::BlockingReaderWriterQueue<StreamBlock*>;
+
+  public:
+  std::vector<size_t>      _channels;
+  QueueT                   _queue;
+  QueueT                   _pool;
+  std::vector<StreamBlock> _streamblocks;
+  StreamBlock*             _cur_read_block{nullptr};
+  StreamBlock*             _cur_write_block{nullptr};
+  short                    _read_remaining{0};
+  const size_t             _buffer_size{0};
+  bool                     _overflow_event{false};
+  static constexpr int     _elements_per_sample{DEFAULT_ELEMS_PER_SAMPLE};
+  unsigned                 _shorts_per_word;
+
+  StreamData(short num_buffers, size_t buffer_size, unsigned shorts_per_word, const std::vector<size_t> & channels)
+  : _channels(channels),
+    _queue(num_buffers),
+    _pool(num_buffers),
+    _buffer_size(buffer_size),
+    _shorts_per_word(shorts_per_word)
+    {
+      _streamblocks.reserve(num_buffers);
+      for(short i=0; i<num_buffers; ++i){
+        _streamblocks.emplace_back(buffer_size);
+        _pool.try_enqueue(&(_streamblocks.back()));
+      }
+    }
+};
 
 class SoapySDRPlay: public SoapySDR::Device
 {
@@ -208,9 +253,9 @@ public:
      * Async API
      ******************************************************************/
 
-    void rx_callback(short *xi, short *xq, unsigned int numSamples);
+    static void rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples);
 
-    void gr_callback(unsigned int gRdB, unsigned int lnaGRdB);
+    void gr_callback(StreamData * pstream, unsigned int gRdB, unsigned int lnaGRdB);
 
 private:
 
@@ -263,7 +308,6 @@ private:
     const unsigned int bufferElems = DEFAULT_BUFFER_LENGTH;
     const int elementsPerSample = DEFAULT_ELEMS_PER_SAMPLE;
 
-    std::atomic_uint shortsPerWord;
     std::atomic_bool streamActive;
     std::atomic_bool useShort;
 
@@ -275,7 +319,7 @@ public:
     mutable std::mutex _general_state_mutex;
 
     std::mutex _buf_mutex;
-    std::condition_variable _buf_cond;
+    //std::condition_variable _buf_cond;
 
 #if 0
     std::vector<std::vector<short> > _buffs;

@@ -11,6 +11,7 @@ endif ()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(LibSDRplay)
+find_package(Threads REQUIRED)
 
 if (NOT LIBSDRPLAY_FOUND)
     message(FATAL_ERROR "SDRPlay development files not found...")
@@ -54,4 +55,5 @@ SOAPY_SDR_MODULE_UTIL(
         Streaming.cpp
     LIBRARIES
         ${LIBSDRPLAY_LIBRARIES}
+        Threads::Threads
 )

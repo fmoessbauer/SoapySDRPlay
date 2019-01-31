@@ -126,10 +126,6 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
     }
     // TODO: other receivers
 
-    //this may change later according to format
-    shortsPerWord = 1;
-    bufferLength = bufferElems * elementsPerSample * shortsPerWord;
-
     //bufferedElems = 0;
     //_currentBuff = 0;
     resetBuffer = false;
