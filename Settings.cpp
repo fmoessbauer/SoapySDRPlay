@@ -130,8 +130,8 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
     shortsPerWord = 1;
     bufferLength = bufferElems * elementsPerSample * shortsPerWord;
 
-    bufferedElems = 0;
-    _currentBuff = 0;
+    //bufferedElems = 0;
+    //_currentBuff = 0;
     resetBuffer = false;
     useShort = true;
     
@@ -471,7 +471,7 @@ void SoapySDRPlay::setFrequency(const int direction,
           sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Tuner_Frf);
         }
       }
-      else if ((name == "CORR") && (ppm != frequency))
+      else if ((name == "CORR") && (deviceParams->devParams->ppm != frequency))
       {
          deviceParams->devParams->ppm = frequency;
          sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Dev_Ppm);
@@ -541,7 +541,6 @@ void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, cons
       auto ifMode = rxChannel->tunerParams.ifType;
 
       sampleRate = getInputSampleRateAndDecimation(reqSampleRate, &decM, &decEnable, ifMode);
-      bwMode = getBwEnumForRate(rate, ifMode);
 
        if ((sampleRate != currSampleRate) || (decM != decMp) || (reqSampleRate != sampleRate))
        {
@@ -873,8 +872,8 @@ SoapySDR::ArgInfoList SoapySDRPlay::getSettingInfo(void) const
 #endif
     
     SoapySDR::ArgInfo AIFArg;
-    AIFArg.key = "if_mode";
-    AIFArg.value = IFtoString(ifMode);
+    //AIFArg.key = "if_mode"; // TODO
+    //AIFArg.value = IFtoString(ifMode);
     AIFArg.name = "IF Mode";
     AIFArg.description = "IF frequency in kHz";
     AIFArg.type = SoapySDR::ArgInfo::STRING;

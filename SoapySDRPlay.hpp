@@ -236,14 +236,12 @@ private:
      * Private variables
      ******************************************************************/
     //device settings
-    sdrplay_api_Bw_MHzT bwMode;
-    sdrplay_api_If_kHzT ifMode;
     float ver;
+    std::string serNo;
 
     int gRdB[2];
     std::atomic_int current_gRdB[2];
     int gRdBsystem;
-    int sps;
     int lnaState[2];
     int hwVer;
 
@@ -257,7 +255,6 @@ private:
     unsigned int decM;
     unsigned int decEnable;
     uint32_t centerFrequency;
-    double ppm;
     std::atomic_int bufferLength;
 
     //numBuffers, bufferElems, elementsPerSample
@@ -267,43 +264,28 @@ private:
     const int elementsPerSample = DEFAULT_ELEMS_PER_SAMPLE;
 
     std::atomic_uint shortsPerWord;
- 
-    sdrplay_api_AgcControlT agcMode;
     std::atomic_bool streamActive;
-  
-    bool dcOffsetMode;
     std::atomic_bool useShort;
-
-    unsigned int IQcorr;
-    int setPoint;
-
-    sdrplay_api_Rsp2_AntennaSelectT antSel;
-    sdrplay_api_TunerSelectT tunSel;
-    int amPort;
-    unsigned int extRef;
-    unsigned int biasTen;
-    unsigned int notchEn;
-    unsigned int dabNotchEn;
-    std::string serNo;
 
 public:
 
    /*******************************************************************
     * Public variables
     ******************************************************************/
-    
     mutable std::mutex _general_state_mutex;
 
     std::mutex _buf_mutex;
     std::condition_variable _buf_cond;
 
+#if 0
     std::vector<std::vector<short> > _buffs;
     size_t	_buf_head;
     size_t	_buf_tail;
     size_t	_buf_count;
-    short *_currentBuff;
+    short * _currentBuff;
     bool _overflowEvent;
     std::atomic_size_t bufferedElems;
     size_t _currentHandle;
+#endif
     std::atomic_bool resetBuffer;
 };
