@@ -82,7 +82,7 @@ static void _gr_callback(
   void *cbContext)
 {
     StreamData *pstream = (StreamData *)cbContext;
-    //return self->gr_callback(gRdB, lnaGRdB); // TODO
+    return pstream->_soapy_instance->gr_callback(pstream, eventId, tuner, params);
 }
 
 void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples, unsigned short channel)
@@ -131,36 +131,26 @@ void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsig
   return;
 }
 
-void SoapySDRPlay::gr_callback(StreamData * pstream, unsigned int gRdB, unsigned int lnaGRdB)
+void SoapySDRPlay::gr_callback(
+  StreamData * pstream,
+  sdrplay_api_EventT eventId,
+  sdrplay_api_TunerSelectT tuner,
+  sdrplay_api_EventParamsT *params)
 {
-#if 0
-    //Beware, lnaGRdB is really the LNA GR, NOT the LNA state !
- 
-    sdrplay_api_GainValuesT gainVals;
+  auto tunerid = (tuner == sdrplay_api_Tuner_A) ? 0 : 1;
 
-    mir_sdr_GetCurrentGain(&gainVals);
+  switch(eventId){
+    case sdrplay_api_GainChange:
+      gRdB[tunerid] = params->gainParams.gRdB;
+      if(gRdB[tunerid] < 200)
+        current_gRdB[tunerid] = gRdB[tunerid];
+      break;
 
-
-    if (gRdB < 200)
-    {
-        current_gRdB = gRdB;
-    }
-
-    if (gRdB < mir_sdr_GAIN_MESSAGE_START_ID)
-    {
-        // gainVals.curr is a calibrated gain value
-    }
-    else if (gRdB == mir_sdr_ADC_OVERLOAD_DETECTED)
-    {
-        mir_sdr_GainChangeCallbackMessageReceived();
-        // OVERLOAD DECTECTED
-    }
-    else
-    {
-        mir_sdr_GainChangeCallbackMessageReceived();
-        // OVERLOAD CORRECTED
-    }
-#endif
+    case sdrplay_api_PowerOverloadChange:
+      sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_OverloadMsgAck);
+      // OVERLOAD DECTECTED
+      break;
+  }
 }
 
 /*******************************************************************
@@ -203,7 +193,7 @@ SoapySDR::Stream *SoapySDRPlay::setupStream(const int direction,
 
     std::lock_guard<std::mutex> lock(_buf_mutex);
 
-    StreamData * pstream = new StreamData(DEFAULT_NUM_BUFFERS, DEFAULT_BUFFER_LENGTH, shortsPerWord, channels);
+    StreamData * pstream = new StreamData(DEFAULT_NUM_BUFFERS, DEFAULT_BUFFER_LENGTH, shortsPerWord, channels, this);
     return (SoapySDR::Stream *) pstream;
 }
 

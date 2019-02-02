@@ -47,9 +47,11 @@
 using StreamBlock = std::vector<short>;
 using CombinedBlock = std::array<StreamBlock*, 2>;
 
+// forward decl
+class SoapySDRPlay;
+
 class StreamData {
   using QueueT = moodycamel::BlockingReaderWriterQueue<StreamBlock*>;
-
   public:
   std::vector<size_t>      _channels;
   std::array<QueueT,2>     _queues;
@@ -62,12 +64,19 @@ class StreamData {
   bool                     _overflow_event{false};
   static constexpr int     _elements_per_sample{DEFAULT_ELEMS_PER_SAMPLE};
   unsigned                 _shorts_per_word;
+  SoapySDRPlay *           _soapy_instance{nullptr};
 
-  StreamData(short num_buffers, size_t buffer_size, unsigned shorts_per_word, const std::vector<size_t> & channels)
+  StreamData(
+    short num_buffers,
+    size_t buffer_size,
+    unsigned shorts_per_word,
+    const std::vector<size_t> & channels,
+    SoapySDRPlay * instance)
   : _channels(channels),
     _pool(num_buffers*channels.size()),
     _buffer_size(buffer_size),
-    _shorts_per_word(shorts_per_word)
+    _shorts_per_word(shorts_per_word),
+    _soapy_instance(instance)
     {
       _streamblocks.reserve(num_buffers*channels.size());
       for(auto & q : _queues)
@@ -248,7 +257,11 @@ public:
 
     static void rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples, unsigned short channel);
 
-    void gr_callback(StreamData * pstream, unsigned int gRdB, unsigned int lnaGRdB);
+    void gr_callback(
+      StreamData * pstream,
+      sdrplay_api_EventT eventId,
+      sdrplay_api_TunerSelectT tuner,
+      sdrplay_api_EventParamsT *params);
 
 private:
 
