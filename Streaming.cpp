@@ -106,7 +106,6 @@ void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsig
   block->resize(spaceReqd);
   auto * beg = block->data();
 
-  //SoapySDR_log(SOAPY_SDR_INFO, "test");
   if (pstream->_shorts_per_word == 1)
   {
      short *dptr = (short*) beg;
@@ -125,7 +124,7 @@ void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsig
         *dptr++ = (float)xq[i] / 32768.0f;
      }
   }
-  // release block
+  // release block (add to queue)
   if(!pstream->_queues[channel].try_enqueue(block)){
     throw std::runtime_error("try to add unavailable block");
   }
@@ -276,14 +275,23 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
        //throw std::runtime_error("StreamInit Error: " + std::to_string(err));
        return SOAPY_SDR_NOT_SUPPORTED;
     }
-    // TODO: on which channel / tuner?
-    //mir_sdr_DecimateControl(decEnable, decM, 1);
+    for(auto & cidx : pstream->_channels){
+      auto * channel = (cidx == 0) ? deviceParams->rxChannelA : deviceParams->rxChannelB;
+      auto tuner = (cidx == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
 
-    //mir_sdr_SetDcMode(4,0);
-    //mir_sdr_SetDcTrackTime(63);
-    
+      // decimation
+      channel->ctrlParams.decimation.enable = decEnable;
+      channel->ctrlParams.decimation.decimationFactor = decM;
+      channel->ctrlParams.decimation.wideBandSignal   = 1;
+
+      // DC Correction
+      channel->tunerParams.dcOffsetTuner.dcCal = 4;
+      channel->tunerParams.dcOffsetTuner.trackTime = 63;
+
+      sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_Decimation);
+    }
+
     streamActive = true;
-    
     return 0;
 }
 
@@ -325,7 +333,6 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
     size_t unused = 0;
     if (pstream->_read_remaining == 0)
     {
-        // TODO
         int ret = this->acquireReadBuffer(stream, unused, (const void **)&source_buffs, flags, timeNs, timeoutUs);
 
         if (ret < 0)
@@ -364,7 +371,6 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
     }
     else
     {
-        // todo
         this->releaseReadBuffer(stream, unused);
     }
     return (int)returnedElems;
