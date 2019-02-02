@@ -44,27 +44,19 @@
 #define DEFAULT_NUM_BUFFERS       (8)
 #define DEFAULT_ELEMS_PER_SAMPLE  (2)
 
-struct StreamBlock {
-  public:
-  std::array<std::vector<short>,2> _buffers;
-  short _size{0};
-
-  StreamBlock(size_t mtu){
-    _buffers[0].resize(mtu);
-    _buffers[1].resize(mtu);
-  }
-};
+using StreamBlock = std::vector<short>;
+using CombinedBlock = std::array<StreamBlock*, 2>;
 
 class StreamData {
   using QueueT = moodycamel::BlockingReaderWriterQueue<StreamBlock*>;
 
   public:
   std::vector<size_t>      _channels;
-  QueueT                   _queue;
+  std::array<QueueT,2>     _queues;
   QueueT                   _pool;
   std::vector<StreamBlock> _streamblocks;
-  StreamBlock*             _cur_read_block{nullptr};
-  StreamBlock*             _cur_write_block{nullptr};
+  CombinedBlock            _cur_read_block;
+  CombinedBlock            _cur_write_block;
   short                    _read_remaining{0};
   const size_t             _buffer_size{0};
   bool                     _overflow_event{false};
@@ -73,13 +65,14 @@ class StreamData {
 
   StreamData(short num_buffers, size_t buffer_size, unsigned shorts_per_word, const std::vector<size_t> & channels)
   : _channels(channels),
-    _queue(num_buffers),
-    _pool(num_buffers),
+    _pool(num_buffers*channels.size()),
     _buffer_size(buffer_size),
     _shorts_per_word(shorts_per_word)
     {
-      _streamblocks.reserve(num_buffers);
-      for(short i=0; i<num_buffers; ++i){
+      _streamblocks.reserve(num_buffers*channels.size());
+      for(auto & q : _queues)
+        q = QueueT(num_buffers); // TODO this is not optimal
+      for(short i=0; i<num_buffers*channels.size(); ++i){
         _streamblocks.emplace_back(buffer_size);
         _pool.try_enqueue(&(_streamblocks.back()));
       }
@@ -253,7 +246,7 @@ public:
      * Async API
      ******************************************************************/
 
-    static void rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples);
+    static void rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples, unsigned short channel);
 
     void gr_callback(StreamData * pstream, unsigned int gRdB, unsigned int lnaGRdB);
 
@@ -289,6 +282,8 @@ private:
     int gRdBsystem;
     int lnaState[2];
     int hwVer;
+    bool master{false};
+    bool dualMode{true};
 
     HANDLE dev;
     sdrplay_api_DeviceParamsT * deviceParams;

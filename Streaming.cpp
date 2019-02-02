@@ -51,7 +51,7 @@ SoapySDR::ArgInfoList SoapySDRPlay::getStreamArgsInfo(const int direction, const
  * Async thread work
  ******************************************************************/
 
-static void _rx_callback(
+static void _rx_callback_A(
   short *xi,
   short *xq,
   sdrplay_api_StreamCbParamsT *params,
@@ -59,10 +59,20 @@ static void _rx_callback(
   unsigned int reset,
   void *cbContext)
 {
-#if 1
     StreamData *pstream = (StreamData *)cbContext;
-    return SoapySDRPlay::rx_callback(pstream, xi, xq, numSamples);
-#endif
+    return SoapySDRPlay::rx_callback(pstream, xi, xq, numSamples, 0);
+}
+
+static void _rx_callback_B(
+  short *xi,
+  short *xq,
+  sdrplay_api_StreamCbParamsT *params,
+  unsigned int numSamples,
+  unsigned int reset,
+  void *cbContext)
+{
+    StreamData *pstream = (StreamData *)cbContext;
+    return SoapySDRPlay::rx_callback(pstream, xi, xq, numSamples, 1);
 }
 
 static void _gr_callback(
@@ -75,35 +85,26 @@ static void _gr_callback(
     //return self->gr_callback(gRdB, lnaGRdB); // TODO
 }
 
-void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples)
+void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsigned int numSamples, unsigned short channel)
 {
   // retract block from pool
   // fill block
   // enqueue
+//  SoapySDR_logf(SOAPY_SDR_INFO, "callback on %d", channel);
 
   // this should not be required as we always start a new block
   int spaceReqd = numSamples * pstream->_elements_per_sample * pstream->_shorts_per_word;
-  StreamBlock * block = pstream->_cur_write_block;
-  // check space in currently opened block
-  // TODO: what is decm
-  auto decM = 1;
-//  if((block->_size + spaceReqd) >= (pstream->_buffer_size / decM)){
-//    // release current block
-//    if(!pstream->_queue.try_enqueue(block)){
-//      // TODO this must not happen (as number of blocks is fixed)
-//      throw std::runtime_error("try to add unavailable block");
-//    }
 
-    // fetch a new block
-    if(!pstream->_pool.try_dequeue(block)){
+  StreamBlock * block{nullptr};
+  // fetch a new block
+  if(!pstream->_pool.try_dequeue(block)){
       pstream->_overflow_event = true;
       return;
-    }
-//  }
-  // TODO: find way to merge individual streams
+  }
+  assert(block != nullptr);
 
-  auto * beg = block->_buffers[0].data() + block->_size;
-  block->_size += spaceReqd;
+  block->resize(spaceReqd);
+  auto * beg = block->data();
 
   //SoapySDR_log(SOAPY_SDR_INFO, "test");
   if (pstream->_shorts_per_word == 1)
@@ -125,7 +126,7 @@ void SoapySDRPlay::rx_callback(StreamData * pstream, short *xi, short *xq, unsig
      }
   }
   // release block
-  if(!pstream->_queue.try_enqueue(block)){
+  if(!pstream->_queues[channel].try_enqueue(block)){
     throw std::runtime_error("try to add unavailable block");
   }
   return;
@@ -204,10 +205,6 @@ SoapySDR::Stream *SoapySDRPlay::setupStream(const int direction,
     std::lock_guard<std::mutex> lock(_buf_mutex);
 
     StreamData * pstream = new StreamData(DEFAULT_NUM_BUFFERS, DEFAULT_BUFFER_LENGTH, shortsPerWord, channels);
-    if(!pstream->_pool.try_dequeue(pstream->_cur_write_block)){
-      throw std::runtime_error("no block in object pool");
-    }
-    assert(pstream->_cur_write_block->_buffers[0].size() > 0);
     return (SoapySDR::Stream *) pstream;
 }
 
@@ -241,6 +238,7 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
     }
     resetBuffer = true;
     sdrplay_api_ErrT err;
+    auto * pstream = (StreamData*) stream;
     
     std::lock_guard <std::mutex> lock(_general_state_mutex);
 
@@ -255,10 +253,18 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
 #endif
 
     sdrplay_api_CallbackFnsT cbFns;
-    cbFns.StreamACbFn = _rx_callback;
+    cbFns.StreamACbFn = _rx_callback_A;
     cbFns.StreamBCbFn = NULL;
     cbFns.EventCbFn = _gr_callback;
 
+    // single channel on tuner 2
+    if(pstream->_channels[0] == 1){
+      cbFns.StreamACbFn = NULL;
+      cbFns.StreamBCbFn = _rx_callback_A;
+    }
+    if(pstream->_channels.size() == 2){
+      cbFns.StreamBCbFn = _rx_callback_B;
+    }
     err = sdrplay_api_Init(dev, &cbFns, (void*)stream);
 
 //    err = mir_sdr_StreamInit(&gRdB, sampleRate / 1e6, centerFrequency / 1e6, bwMode,
@@ -316,10 +322,10 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
     void* source_buffs[2];
 
     // are elements left in the buffer? if not, do a new read.
+    size_t unused = 0;
     if (pstream->_read_remaining == 0)
     {
         // TODO
-        size_t unused = 0;
         int ret = this->acquireReadBuffer(stream, unused, (const void **)&source_buffs, flags, timeNs, timeoutUs);
 
         if (ret < 0)
@@ -328,9 +334,9 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
         }
         pstream->_read_remaining = ret;
     } else {
-      assert(nullptr != pstream->_cur_read_block);
       for(size_t i=0; i<pstream->_channels.size(); ++i){
-        source_buffs[i] = pstream->_cur_read_block->_buffers[i].data();
+        assert(nullptr != pstream->_cur_read_block[i]);
+        source_buffs[i] = pstream->_cur_read_block[i]->data();
       }
     }
 
@@ -359,7 +365,7 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
     else
     {
         // todo
-        this->releaseReadBuffer(stream, (size_t)pstream->_cur_read_block);
+        this->releaseReadBuffer(stream, unused);
     }
     return (int)returnedElems;
 }
@@ -370,7 +376,8 @@ int SoapySDRPlay::readStream(SoapySDR::Stream *stream,
 
 size_t SoapySDRPlay::getNumDirectAccessBuffers(SoapySDR::Stream *stream)
 {
-    return ((StreamData*) stream)->_streamblocks.size();
+  const auto * pstream = ((StreamData*) stream);
+    return pstream->_streamblocks.size() / pstream->_channels.size();
 }
 
 int SoapySDRPlay::getDirectAccessBufferAddrs(SoapySDR::Stream *stream, const size_t handle, void **buffs)
@@ -378,7 +385,7 @@ int SoapySDRPlay::getDirectAccessBufferAddrs(SoapySDR::Stream *stream, const siz
     auto * pstream = (StreamData *) stream;
 
   for(size_t i=0; i<pstream->_channels.size(); ++i){
-    buffs[i] = (void *)pstream->_streamblocks[handle]._buffers[i].data();
+    buffs[i] = (void *)pstream->_cur_read_block[i]->data();
   }
   return 0;
 }
@@ -394,8 +401,12 @@ int SoapySDRPlay::acquireReadBuffer(SoapySDR::Stream *stream,
     if (resetBuffer || pstream->_overflow_event){
       // drain queue
       StreamBlock * item;
-      while(pstream->_queue.try_dequeue(item)){
-        pstream->_pool.try_enqueue(item);
+      for(auto & q : pstream->_queues){
+        while(q.try_dequeue(item)){
+          assert(item != nullptr);
+          if(!pstream->_pool.try_enqueue(item))
+            SoapySDR_log(SOAPY_SDR_WARNING, "failed to re-insert block");
+        }
       }
       pstream->_overflow_event = false;
       if(resetBuffer){
@@ -406,29 +417,38 @@ int SoapySDRPlay::acquireReadBuffer(SoapySDR::Stream *stream,
       }
 
     }
-    StreamBlock * read_block = nullptr;
-    if(!pstream->_queue.wait_dequeue_timed(read_block, std::chrono::microseconds(timeoutUs))){
-      SoapySDR_log(SOAPY_SDR_WARNING, "Timeout");
-      return SOAPY_SDR_TIMEOUT;
+    // extract nchan blocks
+    int nchan = pstream->_channels.size();
+    for(int i=0; i<nchan; ++i){
+      if(!pstream->_queues[i].wait_dequeue_timed(pstream->_cur_read_block[i], std::chrono::microseconds(timeoutUs/nchan))){
+        SoapySDR_logf(SOAPY_SDR_WARNING, "Timeout on %d", i);
+        return SOAPY_SDR_TIMEOUT;
+      }
+      buffs[i] = pstream->_cur_read_block[i];
+      assert(buffs[i] != nullptr);
     }
-    pstream->_cur_read_block = read_block;
-    pstream->_read_remaining = read_block->_size;
-    for(size_t i=0;i<pstream->_channels.size(); ++i){
-      buffs[i] = read_block->_buffers[i].data();
+    auto size = pstream->_cur_read_block[0]->size();
+    pstream->_read_remaining = size;
+    for(size_t i=0;i<nchan; ++i){
+      if(size != pstream->_cur_read_block[i]->size()){
+        SoapySDR_log(SOAPY_SDR_WARNING, "blocks are not of equal size");
+      }
     }
 
     // return number available
-    return read_block->_size;
+    return size;
 }
 
 void SoapySDRPlay::releaseReadBuffer(SoapySDR::Stream *stream, const size_t handle)
 {
     auto * pstream = (StreamData *) stream;
-    auto * block = pstream->_cur_read_block;
-    block->_size = 0;
-    if(!pstream->_pool.try_enqueue(block)){
-      throw std::runtime_error("cannot re-insert block to object pool");
+    auto & block = pstream->_cur_read_block;
+    for(auto b : block){
+      if(b == nullptr) continue;
+      if(!pstream->_pool.try_enqueue(b)){
+        throw std::runtime_error("cannot re-insert block to object pool");
+      }
+      b = nullptr;
     }
-    pstream->_cur_read_block = nullptr;
 }
 
