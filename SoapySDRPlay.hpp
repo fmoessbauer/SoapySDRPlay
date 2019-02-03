@@ -81,7 +81,7 @@ class StreamData {
       _streamblocks.reserve(num_buffers*channels.size());
       for(auto & q : _queues)
         q = QueueT(num_buffers); // TODO this is not optimal
-      for(short i=0; i<num_buffers*channels.size(); ++i){
+      for(size_t i=0; i<num_buffers*channels.size(); ++i){
         _streamblocks.emplace_back(buffer_size);
         _pool.try_enqueue(&(_streamblocks.back()));
       }

@@ -370,7 +370,6 @@ void SoapySDRPlay::setGainMode(const int direction, const size_t channel, const 
     }
     auto & agc = rxChannel->ctrlParams.agc;
     agc.enable = agcMode;
-    //agc.setPoint = setPoint;
 
     sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_Agc);
 }
@@ -559,11 +558,11 @@ void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, cons
       deviceParams->devParams->fsFreq.fsHz = (double) sampleRate;
 
       if(streamActive){
-        //if (ifMode == sdrplay_api_IF_Zero)
-        //{
-        //  reason |= (uint32_t) sdrplay_api_Update_Ctrl_Decimation;
-        //  rxChannel->ctrlParams.decimation.enable = (bool)decEnable;
-        //}
+        if (ifMode == sdrplay_api_IF_Zero)
+        {
+          reason |= (uint32_t) sdrplay_api_Update_Ctrl_Decimation;
+          rxChannel->ctrlParams.decimation.enable = (bool)decEnable;
+        }
         sdrplay_api_ErrT err;
         if((err = sdrplay_api_Update(dev, tuner, (sdrplay_api_ReasonForUpdateT) reason)) != sdrplay_api_Success)
           SoapySDR_logf(SOAPY_SDR_WARNING, "failed to set sample config: %d", err);

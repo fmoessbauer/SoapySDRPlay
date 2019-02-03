@@ -150,6 +150,8 @@ void SoapySDRPlay::gr_callback(
       sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_OverloadMsgAck);
       // OVERLOAD DECTECTED
       break;
+    default:
+      break;
   }
 }
 
@@ -270,12 +272,12 @@ int SoapySDRPlay::activateStream(SoapySDR::Stream *stream,
       auto tuner = (cidx == 0) ? sdrplay_api_Tuner_A : sdrplay_api_Tuner_B;
 
       // decimation
-      channel->ctrlParams.decimation.enable = decEnable;
+      channel->ctrlParams.decimation.enable           = decEnable;
       channel->ctrlParams.decimation.decimationFactor = decM;
       channel->ctrlParams.decimation.wideBandSignal   = 1;
 
       // DC Correction
-      channel->tunerParams.dcOffsetTuner.dcCal = 4;
+      channel->tunerParams.dcOffsetTuner.dcCal     = 4;
       channel->tunerParams.dcOffsetTuner.trackTime = 63;
 
       sdrplay_api_Update(dev, tuner, sdrplay_api_Update_Ctrl_Decimation);
@@ -414,8 +416,8 @@ int SoapySDRPlay::acquireReadBuffer(SoapySDR::Stream *stream,
 
     }
     // extract nchan blocks
-    int nchan = pstream->_channels.size();
-    for(int i=0; i<nchan; ++i){
+    size_t nchan = pstream->_channels.size();
+    for(size_t i=0; i<nchan; ++i){
       if(!pstream->_queues[i].wait_dequeue_timed(pstream->_cur_read_block[i], std::chrono::microseconds(timeoutUs/nchan))){
         SoapySDR_logf(SOAPY_SDR_WARNING, "Timeout on %d", i);
         return SOAPY_SDR_TIMEOUT;
