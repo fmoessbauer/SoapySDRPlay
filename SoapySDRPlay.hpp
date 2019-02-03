@@ -273,7 +273,7 @@ private:
 
     static double getRateForBwEnum(sdrplay_api_Bw_MHzT bwEnum);
 
-    static uint32_t getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, sdrplay_api_If_kHzT ifMode);
+    uint32_t getInputSampleRateAndDecimation(uint32_t rate, unsigned int *decM, unsigned int *decEnable, sdrplay_api_If_kHzT ifMode);
 
     static sdrplay_api_Bw_MHzT getBwEnumForRate(double rate, sdrplay_api_If_kHzT ifMode);
 
@@ -306,7 +306,7 @@ private:
     // TODO: check & remove
     //cached settings
     uint32_t sampleRate;
-    uint32_t reqSampleRate;
+//    uint32_t reqSampleRate;
     unsigned int decM;
     unsigned int decEnable;
     uint32_t centerFrequency;
