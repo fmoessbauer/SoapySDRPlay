@@ -247,6 +247,8 @@ public:
 
     SoapySDR::ArgInfoList getSettingInfo(void) const;
 
+    SoapySDR::ArgInfoList getSettingInfo(const int direction, const size_t channel) const;
+
     void writeSetting(const std::string &key, const std::string &value);
 
     std::string readSetting(const std::string &key) const;
@@ -277,7 +279,7 @@ private:
 
     static  double getBwValueFromEnum(sdrplay_api_Bw_MHzT bwEnum);
 
-    static sdrplay_api_Bw_MHzT mirGetBwMhzEnum(double bw);
+    sdrplay_api_Bw_MHzT mirGetBwMhzEnum(double bw);
 
     static sdrplay_api_If_kHzT stringToIF(std::string ifMode);
 

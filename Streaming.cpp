@@ -418,7 +418,9 @@ int SoapySDRPlay::acquireReadBuffer(SoapySDR::Stream *stream,
     // extract nchan blocks
     size_t nchan = pstream->_channels.size();
     for(size_t i=0; i<nchan; ++i){
-      if(!pstream->_queues[i].wait_dequeue_timed(pstream->_cur_read_block[i], std::chrono::microseconds(timeoutUs/nchan))){
+      // this might lead to a timeout which is nchan * timeout long
+      // but otherwise many timeouts happen
+      if(!pstream->_queues[i].wait_dequeue_timed(pstream->_cur_read_block[i], std::chrono::microseconds(timeoutUs))){
         SoapySDR_logf(SOAPY_SDR_WARNING, "Timeout on %d", i);
         return SOAPY_SDR_TIMEOUT;
       }

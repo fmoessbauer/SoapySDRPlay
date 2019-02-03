@@ -91,9 +91,10 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
       // we are the master instance
       master = true;
       if(dualMode){
+        sampleRate = 6000000.0;
         SoapySDR_log(SOAPY_SDR_INFO, "Mode: Dual Tuner");
         rspDevs[devIdx].rspDuoMode = sdrplay_api_RspDuoMode_Dual_Tuner;
-        rspDevs[devIdx].rspDuoSampleFreq = 6000000.0;
+        rspDevs[devIdx].rspDuoSampleFreq = (double) sampleRate;
       }
     }
 
@@ -113,6 +114,9 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
     deviceParams->devParams->fsFreq.fsHz = (double) sampleRate;
     deviceParams->devParams->ppm         = 0.0;
 
+    // set Tuner 1 as master
+    deviceParams->rxChannelA->tunerParams.ifType = sdrplay_api_IF_Zero;
+
     // per channel settings
     channels.push_back(deviceParams->rxChannelA);
     if(hwVer == SDRPLAY_RSPduo_ID)
@@ -125,8 +129,7 @@ SoapySDRPlay::SoapySDRPlay(const SoapySDR::Kwargs &args)
       chan->ctrlParams.dcOffset.DCenable = 1;
       chan->ctrlParams.dcOffset.IQenable = 1;
 
-      chan->tunerParams.rfFreq.rfHz = 100;
-      //chan->tunerParams.ifType = sdrplay_api_IF_Zero;
+      chan->tunerParams.rfFreq.rfHz = 1000;
       chan->tunerParams.bwType = sdrplay_api_BW_1_536;
       chan->tunerParams.gain.gRdB = 40;
       chan->tunerParams.gain.LNAstate = (hwVer == SDRPLAY_RSP2_ID || hwVer == SDRPLAY_RSPduo_ID || hwVer > 253)? 4: 1;
@@ -552,7 +555,7 @@ void SoapySDRPlay::setSampleRate(const int direction, const size_t channel, cons
       auto ifMode = rxChannel->tunerParams.ifType;
 
       sampleRate = getInputSampleRateAndDecimation((uint32_t)rate, &decM, &decEnable, ifMode);
-      SoapySDR_logf(SOAPY_SDR_INFO, "Set sample rate to: %.0f", (double)sampleRate);
+      SoapySDR_logf(SOAPY_SDR_INFO, "Set sample rate to: %.0f, dec: %i", (double)sampleRate, decM);
 
       uint32_t reason = (uint32_t) sdrplay_api_Update_Dev_Fs;
       deviceParams->devParams->fsFreq.fsHz = (double) sampleRate;
@@ -747,11 +750,15 @@ sdrplay_api_Bw_MHzT SoapySDRPlay::mirGetBwMhzEnum(double bw)
    else if (bw == 300000) return sdrplay_api_BW_0_300;
    else if (bw == 600000) return sdrplay_api_BW_0_600;
    else if (bw == 1536000) return sdrplay_api_BW_1_536;
-   else if (bw == 5000000) return sdrplay_api_BW_5_000;
-   else if (bw == 6000000) return sdrplay_api_BW_6_000;
-   else if (bw == 7000000) return sdrplay_api_BW_7_000;
-   else if (bw == 8000000) return sdrplay_api_BW_8_000;
-   else return sdrplay_api_BW_0_200;
+
+   // in dual mode max bw is 1.536MHz (p.5, RSPduo-Introduction-V3.pdf)
+   if(!dualMode){
+    if (bw == 5000000) return sdrplay_api_BW_5_000;
+    else if (bw == 6000000) return sdrplay_api_BW_6_000;
+    else if (bw == 7000000) return sdrplay_api_BW_7_000;
+    else if (bw == 8000000) return sdrplay_api_BW_8_000;
+   }
+   return sdrplay_api_BW_0_200;
 }
 
 /*******************************************************************
@@ -999,6 +1006,11 @@ SoapySDR::ArgInfoList SoapySDRPlay::getSettingInfo(void) const
     }
 
     return setArgs;
+}
+
+SoapySDR::ArgInfoList SoapySDRPlay::getSettingInfo(const int direction, const size_t channel) const
+{
+  
 }
 
 void SoapySDRPlay::writeSetting(const std::string &key, const std::string &value)
