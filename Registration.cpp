@@ -69,7 +69,7 @@ static std::vector<SoapySDR::Kwargs> findSDRPlay(const SoapySDR::Kwargs &args)
       if (devIdx < nDevs)
       {
          SoapySDR::Kwargs dev;
-         dev["driver"] = "sdrplay3";
+         dev["driver"] = "v3-sdrplay";
          if (rspDevs[devIdx].hwVer > 253)
          {
              sprintf_s(lblstr, 128, "SDRplay Dev%d RSP1A %s", devIdx, rspDevs[devIdx].SerNo);
